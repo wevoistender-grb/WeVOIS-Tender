@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f7a4f">
+<title>WeVois Tender Portal</title>
+<link rel="icon" href="favicon.ico">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="WeVois Tenders">
+<link rel="manifest" href="manifest.json">
+<link rel="stylesheet" href="tender-theme.css">
+<style>
+/* Tender-portal-only additions. Nothing here is used by the billing apps. */
+.tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin:0 0 18px}
+.tabs button{
+  background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);
+  font:inherit;font-size:13px;font-weight:650;padding:10px 14px;cursor:pointer;white-space:nowrap}
+.tabs button:hover{color:var(--text)}
+.tabs button[aria-selected="true"]{color:var(--brand-2);border-bottom-color:var(--brand)}
+.tabs .cnt{
+  display:inline-block;margin-left:6px;font-size:10.5px;font-weight:700;padding:1px 6px;
+  border-radius:10px;background:var(--surface-2);color:var(--muted)}
+.tabs button[aria-selected="true"] .cnt{background:var(--brand);color:#fff}
+
+.mgroup{margin:0 0 8px}
+.mgroup-h{
+  display:flex;align-items:center;gap:10px;padding:9px 2px;font-size:12px;font-weight:750;
+  text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+.mgroup-h .line{flex:1;height:1px;background:var(--border)}
+
+.tl{list-style:none;margin:0;padding:0 0 0 20px;border-left:2px solid var(--border)}
+.tl li{position:relative;padding:0 0 16px 14px;font-size:12.5px}
+.tl li:last-child{padding-bottom:0}
+.tl li::before{
+  content:"";position:absolute;left:-21px;top:4px;width:10px;height:10px;border-radius:50%;
+  background:var(--surface-3);border:2px solid var(--border)}
+.tl li.on::before{background:var(--brand);border-color:var(--brand)}
+.tl li.bad::before{background:var(--bad);border-color:var(--bad)}
+.tl .tl-t{font-weight:700}
+.tl .tl-m{color:var(--muted);font-size:11.5px;margin-top:2px}
+.tl .tl-d{color:var(--muted);font-size:10.5px;margin-top:3px}
+
+.prog{height:6px;border-radius:6px;background:var(--surface-2);overflow:hidden;min-width:70px}
+.prog i{display:block;height:100%;background:var(--brand);border-radius:6px}
+
+.subtabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 14px}
+.subtabs button{
+  background:var(--surface-2);border:1px solid var(--border);border-radius:20px;color:var(--muted);
+  font:inherit;font-size:11.5px;font-weight:650;padding:5px 12px;cursor:pointer}
+.subtabs button[aria-selected="true"]{background:var(--brand);border-color:var(--brand);color:#fff}
+
+.kv{display:grid;grid-template-columns:150px 1fr;gap:7px 14px;font-size:12.5px;margin:0}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0;font-weight:600}
+
+.cmt{border-left:2px solid var(--border);padding:0 0 12px 12px;margin:0 0 4px;font-size:12.5px}
+.cmt .who{font-weight:700}
+.cmt .when{color:var(--muted);font-size:10.5px;margin-left:6px}
+.cmt .body{margin-top:3px;white-space:pre-wrap}
+
+.upfile{
+  border:1px dashed var(--border);border-radius:10px;padding:14px;text-align:center;
+  font-size:12px;color:var(--muted);cursor:pointer}
+.upfile:hover{border-color:var(--brand);color:var(--text)}
+
+@media (max-width:760px){
+  .kpis{grid-template-columns:repeat(2,1fr) !important}
+  .g-2,.g-3,.g-4{grid-template-columns:1fr !important}
+  .form-grid{grid-template-columns:1fr}
+  .kv{grid-template-columns:1fr;gap:2px 0}
+  .kv dd{margin-bottom:8px}
+}
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════ FIRST RUN ══════════════════════════ -->
+<div class="gate" id="setupGate" style="display:none">
+  <div class="gate-card wide">
+    <div class="gate-logo">
+      <img src="logo.png" alt="" onerror="this.style.display='none'">
+      <div><h2>Set up the Tender Portal</h2><p class="sub">Nobody has an account yet</p></div>
+    </div>
+    <div class="gate-err" id="setupErr"></div>
+    <p class="hint" style="margin-bottom:16px">
+      This creates the <b>first administrator</b>. Only the very first account gets
+      administrator rights &mdash; everyone after this is added by you, from inside the portal.
+    </p>
+    <div class="form-grid">
+      <div class="field"><label for="suName">Your full name</label>
+        <input id="suName" type="text" placeholder="Himanshu"></div>
+      <div class="field"><label for="suEmail">Email</label>
+        <input id="suEmail" type="email" autocomplete="username" placeholder="you@wevois.com"></div>
+      <div class="field"><label for="suPass">Password</label>
+        <input id="suPass" type="password" autocomplete="new-password" placeholder="At least 8 characters"></div>
+      <div class="field"><label for="suConfirm">Confirm password</label>
+        <input id="suConfirm" type="password" autocomplete="new-password"></div>
+    </div>
+    <button class="btn primary lg block" id="suCreate">Create the administrator account →</button>
+    <p class="hint" style="margin-top:14px">
+      If this screen appears on a system that already has users, do not use it &mdash; it means the
+      database could not be reached. Tell your developer before entering anything.
+    </p>
+  </div>
+</div>
+
+<!-- ══════════════════════════ LOGIN ══════════════════════════ -->
+<div class="gate" id="loginGate" style="display:none">
+  <div class="gate-card">
+    <div class="gate-logo">
+      <img src="logo.png" alt="" onerror="this.style.display='none'">
+      <div><h2>Tender Portal</h2><p class="sub">Tenders · RFPs · Documents · EMD</p></div>
+    </div>
+    <div class="gate-err" id="loginErr"></div>
+    <div class="field"><label for="loginEmail">Email</label>
+      <input id="loginEmail" type="email" autocomplete="email" placeholder="you@wevois.com"></div>
+    <div class="field"><label for="loginPass">Password</label>
+      <div class="pass-wrap">
+        <input id="loginPass" type="password" autocomplete="current-password" placeholder="Enter password">
+        <button class="eye" id="eyeBtn" type="button">👁</button>
+      </div></div>
+    <div style="text-align:right;margin-bottom:14px"><button class="link-btn" id="forgotBtn">Forgot password?</button></div>
+    <button class="btn primary lg block" id="loginBtn">Sign in →</button>
+    <p class="hint" style="margin-top:14px;text-align:center">Use the account your administrator created for you.</p>
+  </div>
+</div>
+
+<!-- ══════════════════════════ NO ACCESS ══════════════════════════ -->
+<div class="gate" id="denyGate" style="display:none">
+  <div class="gate-card">
+    <div class="gate-logo">
+      <img src="logo.png" alt="" onerror="this.style.display='none'">
+      <div><h2>Tender Portal</h2><p class="sub">Access not enabled</p></div>
+    </div>
+    <div class="banner bad" style="display:flex">
+      Your account can sign in, but it has not been given access to the Tender Portal yet.
+      An admin can switch it on under <b>Team &amp; access</b>.
+    </div>
+    <p class="hint" id="denyWho"></p>
+    <button class="btn block" id="denyOut" style="margin-top:14px">Sign out</button>
+  </div>
+</div>
+
+<div class="loading" id="loadingScreen"><div class="spin"></div><div class="muted">Loading tender portal…</div></div>
+
+<!-- ══════════════════════════ APP ══════════════════════════ -->
+<div id="app" style="display:none">
+
+<div class="topbar">
+  <div class="brand">
+    <img src="logo.png" alt="" onerror="this.style.display='none'">
+    <div><h1>Tender Portal</h1><p class="sub" id="subline">Loading…</p></div>
+  </div>
+  <div class="bell-wrap">
+    <button class="btn bell" id="notifBell">🔔<span class="bell-badge" id="notifBadge" style="display:none">0</span></button>
+    <div class="notif-pop" id="notifPop">
+      <div class="notif-h"><span>Notifications</span><button class="link-btn" id="markReadBtn">Mark all read</button></div>
+      <div class="notif-list" id="notifList"></div>
+    </div>
+  </div>
+  <button class="btn primary" id="newTenderBtn">＋ New tender</button>
+  <button class="btn" id="newRfpBtn">📄 Request RFP</button>
+  <button class="btn" id="exportBtn">⬇ Export</button>
+  <button class="btn" id="passBtn">🔑 Password</button>
+  <button class="btn" id="installBtn" style="display:none">📲 Install</button>
+  <button class="btn" id="logoutBtn">Sign out</button>
+</div>
+
+<div class="wrap">
+
+  <div class="banner bad" id="alertBanner" style="display:none"></div>
+
+  <div class="tabs" id="tabs" role="tablist">
+    <button role="tab" data-view="dash"    aria-selected="true">Dashboard</button>
+    <button role="tab" data-view="tenders" aria-selected="false">Tenders <span class="cnt" id="cntTenders">0</span></button>
+    <button role="tab" data-view="rfps"    aria-selected="false">RFP requests <span class="cnt" id="cntRfps">0</span></button>
+    <button role="tab" data-view="docs"    aria-selected="false">Documents <span class="cnt" id="cntDocs">0</span></button>
+    <button role="tab" data-view="emd"     aria-selected="false">EMD &amp; fees <span class="cnt" id="cntEmd">0</span></button>
+    <button role="tab" data-view="team"    aria-selected="false" id="teamTab" style="display:none">Team &amp; access</button>
+  </div>
+
+  <!-- ─────────── DASHBOARD ─────────── -->
+  <section id="view-dash">
+    <div class="kpis" id="dashKpis"></div>
+
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2>Closing in the next <span id="upDays">15</span> days</h2>
+          <p class="cap">Tenders not yet submitted, soonest first. Anything already past its date is shown first, in red.</p>
+        </div>
+        <div class="seg" id="upSeg">
+          <button type="button" data-days="7"  aria-pressed="false">7 days</button>
+          <button type="button" data-days="15" aria-pressed="true">15 days</button>
+          <button type="button" data-days="30" aria-pressed="false">30 days</button>
+        </div>
+      </div>
+      <div id="upcomingRows"></div>
+    </div>
+
+    <div class="grid g-2">
+      <div class="card">
+        <h2>Pipeline</h2>
+        <p class="cap">Where every tender you can see currently sits</p>
+        <div id="funnelRows"></div>
+      </div>
+      <div class="card">
+        <h2>By region</h2>
+        <p class="cap">Count and estimated value</p>
+        <div id="regionChart"></div>
+      </div>
+    </div>
+
+    <div class="grid g-2">
+      <div class="card">
+        <h2>RFP requests — how the tender team is doing</h2>
+        <p class="cap">Open requests, how many are past their needed-by date, and the average turnaround</p>
+        <div class="stat-2" id="rfpStats"></div>
+        <div id="rfpLateRows"></div>
+      </div>
+      <div class="card">
+        <h2>Documents expiring</h2>
+        <p class="cap">Company documents due to expire in the next 60 days</p>
+        <div id="expiryRows"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── TENDERS ─────────── -->
+  <section id="view-tenders" style="display:none">
+    <div class="controls">
+      <div class="field"><label for="fSearch">Search</label>
+        <input id="fSearch" type="search" placeholder="Title, NIT no., authority, city"></div>
+      <div class="field"><label for="fRegion">Region</label><select id="fRegion"></select></div>
+      <div class="field"><label for="fTeam">Team</label><select id="fTeam"></select></div>
+      <div class="field"><label for="fStage">Stage</label><select id="fStage"></select></div>
+      <div class="field"><label for="fResult">Result</label><select id="fResult"></select></div>
+      <div class="field"><label for="fMonth">Closing month</label><select id="fMonth"></select></div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <div><h2 id="tListTitle">Tenders</h2>
+          <p class="cap">Grouped by the month the bid closes · click any row for the full file</p></div>
+        <div class="seg" id="groupSeg">
+          <button type="button" data-g="month"  aria-pressed="true">By month</button>
+          <button type="button" data-g="region" aria-pressed="false">By region</button>
+          <button type="button" data-g="flat"   aria-pressed="false">Flat list</button>
+        </div>
+      </div>
+      <div id="tenderList"></div>
+    </div>
+  </section>
+
+  <!-- ─────────── RFP REQUESTS ─────────── -->
+  <section id="view-rfps" style="display:none">
+    <div class="subtabs" id="rfpFilter">
+      <button type="button" data-f="open"  aria-selected="true">Open</button>
+      <button type="button" data-f="mine"  aria-selected="false">Raised by me</button>
+      <button type="button" data-f="tome"  aria-selected="false">Assigned to me</button>
+      <button type="button" data-f="late"  aria-selected="false">Overdue</button>
+      <button type="button" data-f="all"   aria-selected="false">All</button>
+    </div>
+    <div class="card">
+      <h2>RFP &amp; document requests</h2>
+      <p class="cap">Every request, who asked, who is preparing it, and where it has reached</p>
+      <div id="rfpList"></div>
+    </div>
+  </section>
+
+  <!-- ─────────── DOCUMENTS ─────────── -->
+  <section id="view-docs" style="display:none">
+    <div class="card">
+      <div class="card-head">
+        <div><h2>Company document vault</h2>
+          <p class="cap">The master copies every bid draws on. Expiry dates drive the alerts on the dashboard.</p></div>
+        <button class="btn primary sm" id="newDocBtn">＋ Add document</button>
+      </div>
+      <div class="controls" style="margin-bottom:14px">
+        <div class="field"><label for="fDocCat">Category</label><select id="fDocCat"></select></div>
+        <div class="field"><label for="fDocSearch">Search</label><input id="fDocSearch" type="search" placeholder="Document name"></div>
+      </div>
+      <div id="docList"></div>
+    </div>
+  </section>
+
+  <!-- ─────────── EMD ─────────── -->
+  <section id="view-emd" style="display:none">
+    <div class="kpis" id="emdKpis" style="grid-template-columns:repeat(4,1fr)"></div>
+    <div class="card">
+      <div class="card-head">
+        <div><h2>EMD, bank guarantees and fees</h2>
+          <p class="cap">Money paid out per tender and whether it has come back</p></div>
+        <div class="seg" id="emdSeg">
+          <button type="button" data-f="out" aria-pressed="true">Outstanding</button>
+          <button type="button" data-f="all" aria-pressed="false">All</button>
+        </div>
+      </div>
+      <div id="emdList"></div>
+    </div>
+  </section>
+
+  <!-- ─────────── TEAM &amp; ACCESS ─────────── -->
+  <section id="view-team" style="display:none">
+    <div class="grid g-2">
+      <div class="card">
+        <div class="card-head">
+          <div><h2>Org units</h2><p class="cap">Who sits under whom. A unit sees itself and everything below it.</p></div>
+          <button class="btn sm" id="newTeamBtn">＋ Add unit</button>
+        </div>
+        <div id="teamTree"></div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <div><h2>Regions</h2><p class="cap">A person only sees tenders in the regions ticked for them</p></div>
+          <button class="btn sm" id="newRegionBtn">＋ Add region</button>
+        </div>
+        <div id="regionList"></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <div><h2>People</h2>
+          <p class="cap">Create accounts, give tender access, put people in a unit and tick their regions</p></div>
+        <button class="btn primary sm" id="newUserBtn">＋ Add a user</button>
+      </div>
+      <div id="peopleList"></div>
+    </div>
+  </section>
+
+</div><!-- /wrap -->
+</div><!-- /app -->
+
+<!-- ══════════════════════════ OVERLAYS ══════════════════════════ -->
+
+<!-- New / edit tender -->
+<div class="overlay" id="tenderOverlay">
+  <div class="modal wide">
+    <div class="modal-h">
+      <div><h3 id="teTitle">New tender</h3><p id="teSubtitle">Upload the notice PDF and the details fill themselves in</p></div>
+      <button class="x" data-close>✕</button>
+    </div>
+    <div class="modal-b">
+      <div class="banner" id="teBanner" style="display:none"></div>
+
+      <div class="upfile" id="tePdfDrop">
+        📄 <b>Read a tender notice PDF</b> — click to choose a file. Everything it finds is filled in below and stays editable.
+        <input type="file" id="tePdf" accept="application/pdf" style="display:none">
+      </div>
+
+      <div class="sec-title">The tender</div>
+      <div class="form-grid">
+        <div class="field full"><label for="teTitleIn">Title / name of work *</label>
+          <input id="teTitleIn" type="text" placeholder="Door-to-door waste collection, Ward 1-20"></div>
+        <div class="field"><label for="teNit">NIT / tender no.</label><input id="teNit" type="text"></div>
+        <div class="field"><label for="teType">Type</label><select id="teType"></select></div>
+        <div class="field"><label for="teAuthority">Authority</label>
+          <input id="teAuthority" type="text" placeholder="Nagar Nigam Ajmer"></div>
+        <div class="field"><label for="teDept">Department</label><input id="teDept" type="text"></div>
+        <div class="field"><label for="teCity">City</label><input id="teCity" type="text"></div>
+        <div class="field"><label for="teRegion">Region *</label><select id="teRegion"></select></div>
+        <div class="field"><label for="teTeam">Owning team *</label><select id="teTeam"></select>
+          <div class="hint">Decides who else can see this tender</div></div>
+        <div class="field"><label for="teOwner">Person responsible</label><select id="teOwner"></select></div>
+        <div class="field full"><label for="tePortal">Portal / document link</label><input id="tePortal" type="url"></div>
+        <div class="field full"><label for="teScope">Scope summary</label><textarea id="teScope" rows="2"></textarea></div>
+      </div>
+
+      <div class="sec-title">Dates</div>
+      <div class="form-grid">
+        <div class="field"><label for="tePub">Published</label><input id="tePub" type="date"></div>
+        <div class="field"><label for="tePre">Pre-bid meeting</label><input id="tePre" type="date"></div>
+        <div class="field"><label for="teQuery">Last date for queries</label><input id="teQuery" type="date"></div>
+        <div class="field"><label for="teSub">Submission deadline *</label><input id="teSub" type="date"></div>
+        <div class="field"><label for="teSubTime">Submission time</label><input id="teSubTime" type="text" placeholder="15:00"></div>
+        <div class="field"><label for="teOpen">Bid opening</label><input id="teOpen" type="date"></div>
+      </div>
+
+      <div class="sec-title">Money</div>
+      <div class="form-grid">
+        <div class="field"><label for="teValue">Estimated value (₹)</label><input id="teValue" type="number" min="0" step="1"></div>
+        <div class="field"><label for="teEmd">EMD (₹)</label><input id="teEmd" type="number" min="0" step="1"></div>
+        <div class="field"><label for="teFee">Tender fee (₹)</label><input id="teFee" type="number" min="0" step="1"></div>
+        <div class="field"><label for="teProc">Processing fee (₹)</label><input id="teProc" type="number" min="0" step="1"></div>
+        <div class="field"><label for="teMonths">Contract period (months)</label><input id="teMonths" type="number" min="0" step="1"></div>
+      </div>
+
+      <div class="sec-title">Status</div>
+      <div class="form-grid">
+        <div class="field"><label for="teStage">Stage</label><select id="teStage"></select></div>
+        <div class="field"><label for="teGo">Go / No-Go</label><select id="teGo"></select></div>
+        <div class="field full"><label for="teGoWhy">Reason for the decision</label><input id="teGoWhy" type="text"></div>
+        <div class="field full"><label for="teElig">Eligibility notes</label><textarea id="teElig" rows="2"></textarea></div>
+        <div class="field full"><label for="teRemark">Remarks</label><textarea id="teRemark" rows="2"></textarea></div>
+      </div>
+
+      <div id="teSeedWrap">
+        <div class="sec-title">Checklist</div>
+        <label class="checks" style="display:flex"><input type="checkbox" id="teSeed" checked>
+          <span>Start this tender with the standard document checklist (<span id="teSeedN">0</span> items) — you can edit it after</span></label>
+      </div>
+    </div>
+    <div class="modal-f">
+      <button class="btn danger" id="teDelete" style="display:none;margin-right:auto">Delete</button>
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn primary" id="teSave">Save tender</button>
+    </div>
+  </div>
+</div>
+
+<!-- Tender detail -->
+<div class="overlay" id="detailOverlay">
+  <div class="modal wide">
+    <div class="modal-h">
+      <div><h3 id="dTitle">Tender</h3><p id="dSub"></p></div>
+      <button class="x" data-close>✕</button>
+    </div>
+    <div class="modal-b">
+      <div class="subtabs" id="dTabs">
+        <button type="button" data-d="info"  aria-selected="true">Details</button>
+        <button type="button" data-d="check" aria-selected="false">Checklist</button>
+        <button type="button" data-d="emd"   aria-selected="false">EMD &amp; fees</button>
+        <button type="button" data-d="rfp"   aria-selected="false">RFP requests</button>
+        <button type="button" data-d="talk"  aria-selected="false">Comments</button>
+      </div>
+      <div id="dInfo"></div>
+      <div id="dCheck" style="display:none"></div>
+      <div id="dEmd"   style="display:none"></div>
+      <div id="dRfp"   style="display:none"></div>
+      <div id="dTalk"  style="display:none"></div>
+    </div>
+    <div class="modal-f">
+      <button class="btn" data-close>Close</button>
+      <button class="btn primary" id="dEdit">Edit tender</button>
+    </div>
+  </div>
+</div>
+
+<!-- New / edit RFP request -->
+<div class="overlay" id="rfpOverlay">
+  <div class="modal">
+    <div class="modal-h">
+      <div><h3 id="reTitle">Request a document</h3><p>The tender team prepares it. Every step is timestamped.</p></div>
+      <button class="x" data-close>✕</button>
+    </div>
+    <div class="modal-b">
+      <div class="banner" id="reBanner" style="display:none"></div>
+      <div class="field"><label for="reTender">For which tender</label><select id="reTender"></select></div>
+      <div class="field"><label for="reTitleIn">What do you need *</label>
+        <input id="reTitleIn" type="text" placeholder="Technical bid RFP for Ajmer D2D"></div>
+      <div class="form-grid">
+        <div class="field"><label for="reType">Document type</label><select id="reType"></select></div>
+        <div class="field"><label for="rePri">Priority</label><select id="rePri"></select></div>
+        <div class="field"><label for="reNeed">Needed by</label><input id="reNeed" type="date"></div>
+        <div class="field"><label for="reAssign">Assign to</label><select id="reAssign"></select></div>
+      </div>
+      <div class="field"><label for="reDesc">Details</label><textarea id="reDesc" rows="3"
+        placeholder="What exactly is required, any format the authority insists on, anything already tried"></textarea></div>
+    </div>
+    <div class="modal-f">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn primary" id="reSave">Send request</button>
+    </div>
+  </div>
+</div>
+
+<!-- RFP detail + timeline -->
+<div class="overlay" id="rfpDetailOverlay">
+  <div class="modal">
+    <div class="modal-h">
+      <div><h3 id="rdTitle">Request</h3><p id="rdSub"></p></div>
+      <button class="x" data-close>✕</button>
+    </div>
+    <div class="modal-b" id="rdBody"></div>
+    <div class="modal-f">
+      <button class="btn" data-close>Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Company document -->
+<div class="overlay" id="docOverlay">
+  <div class="modal">
+    <div class="modal-h">
+      <div><h3 id="cdTitle">Add document</h3><p>A master copy every bid can draw on</p></div>
+      <button class="x" data-close>✕</button>
+    </div>
+    <div class="modal-b">
+      <div class="banner" id="cdBanner" style="display:none"></div>
+      <div class="field"><label for="cdName">Name *</label><input id="cdName" type="text"></div>
+      <div class="form-grid">
+        <div class="field"><label for="cdCat">Category</label><select id="cdCat"></select></div>
+        <div class="field"><label for="cdNo">Document no.</label><input id="cdNo" type="text"></div>
+        <div class="field"><label for="cdIssuer">Issued by</label><input id="cdIssuer" type="text"></div>
+        <div class="field"><label for="cdIssue">Issue date</label><input id="cdIssue" type="date"></div>
+        <div class="field"><label for="cdExpiry">Expiry date</label><input id="cdExpiry" type="date">
+          <div class="hint">Leave blank if it never expires</div></div>
+      </div>
+      <div class="field"><label for="cdNotes">Notes</label><textarea id="cdNotes" rows="2"></textarea></div>
+      <div class="field"><label>File</label>
+        <div class="upfile" id="cdDrop">📎 <span id="cdFileName">Click to attach the document</span>
+          <input type="file" id="cdFile" style="display:none"></div>
+      </div>
+    </div>
+    <div class="modal-f">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn primary" id="cdSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- EMD entry -->
+<div class="overlay" id="emdOverlay">
+  <div class="modal">
+    <div class="modal-h">
+      <div><h3 id="eeTitle">Record a payment</h3><p id="eeSub"></p></div>
+      <button class="x" data-close>✕</button>
+    </div>
+    <div class="modal-b">
+      <div class="banner" id="eeBanner" style="display:none"></div>
+      <div class="form-grid">
+        <div class="field"><label for="eeKind">What</label><select id="eeKind"></select></div>
+        <div class="field"><label for="eeAmount">Amount (₹) *</label><input id="eeAmount" type="number" min="0" step="1"></div>
+        <div class="field"><label for="eeMode">Mode</label><select id="eeMode"></select></div>
+        <div class="field"><label for="eeRef">Instrument / UTR no.</label><input id="eeRef" type="text"></div>
+        <div class="field"><label for="eeBank">Bank</label><input id="eeBank" type="text"></div>
+        <div class="field"><label for="eePaid">Paid on</label><input id="eePaid" type="date"></div>
+        <div class="field"><label for="eeValid">Valid till</label><input id="eeValid" type="date"></div>
+        <div class="field"><label for="eeStatus">Status</label><select id="eeStatus"></select></div>
+        <div class="field"><label for="eeDue">Refund due on</label><input id="eeDue" type="date"></div>
+        <div class="field"><label for="eeBack">Refunded on</label><input id="eeBack" type="date"></div>
+      </div>
+      <div class="field"><label for="eeNotes">Notes</label><textarea id="eeNotes" rows="2"></textarea></div>
+    </div>
+    <div class="modal-f">
+      <button class="btn danger" id="eeDelete" style="display:none;margin-right:auto">Delete</button>
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn primary" id="eeSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Person access -->
+<div class="overlay" id="personOverlay">
+  <div class="modal">
+    <div class="modal-h">
+      <div><h3 id="peTitle">Access</h3><p id="peSub"></p></div>
+      <button class="x" data-close>✕</button>
+    </div>
+    <div class="modal-b">
+      <div class="banner" id="peBanner" style="display:none"></div>
+      <label class="checks" style="display:flex;margin-bottom:14px">
+        <input type="checkbox" id="peAccess"><span>May open the Tender Portal</span></label>
+      <div class="form-grid">
+        <div class="field"><label for="peTeam">Org unit</label><select id="peTeam"></select></div>
+        <div class="field"><label for="peRole">Tender role</label><select id="peRole"></select></div>
+      </div>
+      <div class="field"><label>Regions</label>
+        <div class="checks" id="peRegions"></div>
+        <div class="hint">Tick none to give every region</div></div>
+    </div>
+    <div class="modal-f">
+      <button class="btn danger" id="peRemove" style="margin-right:auto">Remove</button>
+      <button class="btn" id="peToggle">Deactivate</button>
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn primary" id="peSave">Save access</button>
+    </div>
+  </div>
+</div>
+
+<!-- Create a user -->
+<div class="overlay" id="userOverlay">
+  <div class="modal">
+    <div class="modal-h">
+      <div><h3>Add a user</h3><p>They sign in with this email and password</p></div>
+      <button class="x" data-close>✕</button>
+    </div>
+    <div class="modal-b">
+      <div class="banner" id="nuBanner" style="display:none"></div>
+      <div class="form-grid">
+        <div class="field"><label for="nuName">Full name *</label><input id="nuName" type="text"></div>
+        <div class="field"><label for="nuEmail">Email *</label><input id="nuEmail" type="email"></div>
+        <div class="field"><label for="nuPass">Password *</label>
+          <input id="nuPass" type="password" placeholder="At least 8 characters"></div>
+        <div class="field"><label for="nuMobile">Mobile</label><input id="nuMobile" type="text"></div>
+        <div class="field"><label for="nuDesig">Designation</label><input id="nuDesig" type="text" placeholder="AVP - Rajasthan"></div>
+        <div class="field"><label for="nuAccount">Account level</label><select id="nuAccount"></select></div>
+        <div class="field"><label for="nuTeam">Org unit</label><select id="nuTeam"></select></div>
+        <div class="field"><label for="nuRole">Tender role</label><select id="nuRole"></select></div>
+      </div>
+      <div class="field"><label>Regions</label>
+        <div class="checks" id="nuRegions"></div>
+        <div class="hint">Tick none to give every region</div></div>
+      <label class="checks" style="display:flex"><input type="checkbox" id="nuAccess" checked>
+        <span>May open the Tender Portal straight away</span></label>
+    </div>
+    <div class="modal-f">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn primary" id="nuSave">Create user</button>
+    </div>
+  </div>
+</div>
+
+<!-- Org unit -->
+<div class="overlay" id="teamOverlay">
+  <div class="modal">
+    <div class="modal-h">
+      <div><h3 id="tuTitle">Add org unit</h3><p>A unit sees itself and everything under it</p></div>
+      <button class="x" data-close>✕</button>
+    </div>
+    <div class="modal-b">
+      <div class="banner" id="tuBanner" style="display:none"></div>
+      <div class="field"><label for="tuName">Name *</label><input id="tuName" type="text" placeholder="AVP - Rajasthan"></div>
+      <div class="form-grid">
+        <div class="field"><label for="tuParent">Reports into</label><select id="tuParent"></select></div>
+        <div class="field"><label for="tuScope">Visibility</label><select id="tuScope">
+          <option value="subtree">Own unit and everything below</option>
+          <option value="global">Every tender in the company</option>
+        </select></div>
+      </div>
+      <label class="checks" style="display:flex"><input type="checkbox" id="tuUpload" checked>
+        <span>Members may add new tenders</span></label>
+    </div>
+    <div class="modal-f">
+      <button class="btn danger" id="tuDelete" style="display:none;margin-right:auto">Delete</button>
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn primary" id="tuSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Region -->
+<div class="overlay" id="regionOverlay">
+  <div class="modal">
+    <div class="modal-h">
+      <div><h3 id="rgTitle">Add region</h3><p>Used to wall off who sees what</p></div>
+      <button class="x" data-close>✕</button>
+    </div>
+    <div class="modal-b">
+      <div class="banner" id="rgBanner" style="display:none"></div>
+      <div class="field"><label for="rgName">Name *</label><input id="rgName" type="text" placeholder="Madhya Pradesh"></div>
+    </div>
+    <div class="modal-f">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn primary" id="rgSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Change password -->
+<div class="overlay" id="passOverlay">
+  <div class="modal">
+    <div class="modal-h"><div><h3>Change password</h3><p>At least 8 characters</p></div>
+      <button class="x" data-close>✕</button></div>
+    <div class="modal-b">
+      <div class="gate-err" id="cpErr"></div>
+      <div class="field"><label for="cpNew">New password</label><input id="cpNew" type="password"></div>
+      <div class="field"><label for="cpConfirm">Confirm</label><input id="cpConfirm" type="password"></div>
+    </div>
+    <div class="modal-f"><button class="btn" data-close>Cancel</button>
+      <button class="btn primary" id="cpSave">Update</button></div>
+  </div>
+</div>
+
+<!-- Install help -->
+<div class="overlay" id="installOverlay">
+  <div class="modal">
+    <div class="modal-h"><div><h3>Install the tender portal</h3><p>Add it to your home screen</p></div>
+      <button class="x" data-close>✕</button></div>
+    <div class="modal-b">
+      <div id="instAndroid" style="display:none"><p>Tap <b>Install</b> when your browser offers it.</p></div>
+      <div id="instIos" style="display:none">
+        <p>On iPhone: tap <b>Share</b> → <b>Add to Home Screen</b>.</p></div>
+    </div>
+    <div class="modal-f"><button class="btn primary" data-close>Got it</button></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="supabase-config.js"></script>
+<script src="tender-engine.js"></script>
+<script src="tender-data.js"></script>
+<script src="tender-app.js"></script>
+</body>
+</html>

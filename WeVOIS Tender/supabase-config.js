@@ -1,0 +1,16 @@
+/* WeVois Tender Portal - Supabase connection.
+ *
+ * This portal has its OWN Supabase project. Do not point it at the billing
+ * project: the tables have the same names and it would collide.
+ *
+ * Where to find these two values:
+ *   Supabase dashboard -> your tender project -> Settings -> API
+ *     Project URL  ->  SUPABASE_URL
+ *     anon public  ->  SUPABASE_ANON_KEY
+ *
+ * The anon key is public by design - it is safe in the browser. Row Level
+ * Security is what protects the data, and TENDER-SETUP.sql switches it on for
+ * every table. NEVER put the service_role key in this file.
+ */
+const SUPABASE_URL      = 'PASTE_YOUR_PROJECT_URL_HERE';
+const SUPABASE_ANON_KEY = 'PASTE_YOUR_ANON_PUBLIC_KEY_HERE';

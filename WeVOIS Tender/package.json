@@ -1,0 +1,6 @@
+{
+  "name": "wevois-tender-portal",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone tender pipeline, RFP tracking, document vault and EMD register."
+}
