@@ -12,5 +12,5 @@
  * Security is what protects the data, and TENDER-SETUP.sql switches it on for
  * every table. NEVER put the service_role key in this file.
  */
-const SUPABASE_URL      = 'PASTE_YOUR_PROJECT_URL_HERE';
-const SUPABASE_ANON_KEY = 'PASTE_YOUR_ANON_PUBLIC_KEY_HERE';
+const SUPABASE_URL      = 'https://btertydecnruwvvunrhm.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ0ZXJ0eWRlY25ydXd2dnVucmhtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUyODk0MjksImV4cCI6MjEwMDg2NTQyOX0.1mvnN7WO0BGfgvOeOxcQ5CiqTFNMeBdLYyMqyxHLsSc';
