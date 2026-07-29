@@ -1448,8 +1448,56 @@ create policy tender_files_update on storage.objects for update to authenticated
     )
   );
 
+-- ---------------------------------------------------------------------------
+--  13. PUT ON HOLD
+--
+--  The VP is the vice president of the company. He is not going to sit and
+--  write the RFP. A request reaches him and he does one of three things:
+--  accept it, park it, or reject it. Then he hands the work to somebody.
+--
+--  'On Hold' was missing entirely - the only choices were accept or reject,
+--  which forces a decision that is not ready to be made.
+--
+--  It needs its own timestamp for the same reason every other wait here has
+--  one: a request parked in March and forgotten is invisible unless you can
+--  ask how long it has been parked.
+-- ---------------------------------------------------------------------------
+alter table public.tender_rfp_requests add column if not exists held_at timestamptz;
+
+comment on column public.tender_rfp_requests.held_at is
+  'When it was last put on hold. Cleared when it moves on, so "is it parked, and since when" is one column.';
+
+create or replace function public.wv_rfp_stamp()
+returns trigger language plpgsql set search_path = public as $$
+begin
+  if new.status = 'Accepted'          and new.accepted_at         is null then new.accepted_at         := now(); end if;
+  if new.status = 'In Preparation'    and new.started_at          is null then new.started_at          := now(); end if;
+  if new.status = 'Delivered'         and new.delivered_at        is null then new.delivered_at        := now(); end if;
+  if new.status = 'Changes Requested'                                     then new.change_requested_at := now(); end if;
+  if new.status = 'Revised'                                               then new.revised_at          := now(); end if;
+  if new.status = 'Closed'            and new.closed_at           is null then new.closed_at           := now(); end if;
+  if new.status = 'Rejected'          and new.rejected_at         is null then new.rejected_at         := now(); end if;
+
+  -- Held is the one status you can come back OUT of and go into again, so it
+  -- is stamped on every entry and cleared on the way out, rather than being
+  -- written once like the milestones above.
+  if new.status = 'On Hold' then
+    if tg_op = 'INSERT' or old.status is distinct from 'On Hold' then
+      new.held_at := now();
+    end if;
+  else
+    new.held_at := null;
+  end if;
+
+  return new;
+end $$;
+
+drop trigger if exists rfp_stamp on public.tender_rfp_requests;
+create trigger rfp_stamp before insert or update on public.tender_rfp_requests
+  for each row execute function public.wv_rfp_stamp();
+
 -- ===========================================================================
---  SECTION 13 - VERIFICATION
+--  SECTION 14 - VERIFICATION
 --  Expect:  15  -  3  -  7  -  23  -  15  -  true
 --  tables, regions, org units, standard documents, RLS-protected tables,
 --  and "the system is brand new, go and create the first administrator".

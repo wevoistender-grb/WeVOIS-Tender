@@ -919,9 +919,11 @@
        offering the picker would be a lie. */
     show('reAssignWrap', WVT.canAssignRfp());
     $('reAssign').innerHTML = opts(
-      WVT.profiles.filter(function (p) { return p.tender_role === 'tender_team' || p.role === 'admin'; })
-        .map(function (p) { return { value: p.id, label: p.full_name || p.email }; }),
-      '', 'Tender team decides');
+      WVT.assignableProfiles().map(function (p) {
+        return { value: p.id, label: (p.full_name || p.email) +
+          (p.tender_role ? ' — ' + (WVT.ROLE_LABEL[p.tender_role] || p.tender_role) : '') };
+      }),
+      '', 'Decide later');
     setVal('reTitleIn', ''); setVal('reDesc', ''); setVal('reNeed', '');
     banner('reBanner', '');
     WV.openOverlay('rfpOverlay');
@@ -978,15 +980,31 @@
     var events = await WVT.loadEvents(id);
     var me = String(WV.currentUser.id);
     var isRequester = String(r.requested_by) === me;
-    /* The person it was given to, or the people who give it out. Being in the
-       tender team is no longer enough - an executive only ever sees the
-       requests assigned to them. */
-    var canWork = String(r.assigned_to) === me || WVT.canAssignRfp();
+    /* Two different jobs, and they are NOT the same person.
+     *
+     * The VP is the vice president of the company. He is not going to sit and
+     * write the RFP. A request reaches him, he accepts, holds or rejects it,
+     * and then hands it to somebody who will do the work.
+     *
+     * Lumping these together was the bug: it offered the VP "Start preparing"
+     * and "Mark delivered", and the attach-the-copy box with them. */
+    var canDecideRfp = WVT.canAssignRfp();               // VP, Founder, admin
+    var canPrepare   = String(r.assigned_to) === me;     // the person doing the work
 
-    /* Which buttons make sense at this point in the request's life. */
     var actions = [];
-    if (canWork) {
-      if (r.status === 'Requested')          actions.push(['Accepted', 'Accept'], ['Rejected', 'Reject']);
+
+    /* The VP's side of it: answer the request, then give it to someone. */
+    if (canDecideRfp) {
+      if (r.status === 'Requested') {
+        actions.push(['Accepted', 'Accept'], ['On Hold', 'Put on hold'], ['Rejected', 'Reject']);
+      }
+      if (r.status === 'On Hold') {
+        actions.push(['Accepted', 'Accept'], ['Rejected', 'Reject']);
+      }
+    }
+
+    /* The preparer's side: get on with it. */
+    if (canPrepare) {
       if (r.status === 'Accepted')           actions.push(['In Preparation', 'Start preparing']);
       if (r.status === 'In Preparation')     actions.push(['Delivered', 'Mark delivered']);
       if (r.status === 'Changes Requested')  actions.push(['Revised', 'Deliver revision']);
@@ -1016,7 +1034,7 @@
           : '<span class="muted">Nothing attached yet</span>');
     kv.push(['The copy', copyNow]);
 
-    var attach = canWork
+    var attach = canPrepare
       ? '<div class="sec-title">Attach the copy</div>' +
         '<p class="hint" style="margin:-4px 0 10px">Uploading keeps it private to the Founder, the VP, ' +
         'whoever raised this and you. A link does not — whoever holds it can open the file.</p>' +
@@ -1029,6 +1047,28 @@
         '<button class="btn sm primary" id="rdAttach">Attach as v' + ((Number(r.current_version) || 0) + 1) + '</button>' +
         '<div class="banner" id="rdAttachBanner" style="display:none"></div>'
       : '';
+
+    /* Handing it over. Offered from the moment it is accepted, and still
+       offered afterwards so a request can be moved to somebody else. */
+    var assignBox = '';
+    if (canDecideRfp && ['Accepted', 'In Preparation', 'Changes Requested', 'On Hold'].indexOf(r.status) >= 0) {
+      var people = WVT.assignableProfiles();
+      assignBox =
+        '<div class="sec-title">' + (r.assigned_to ? 'Hand it to someone else' : 'Give it to someone') + '</div>' +
+        '<p class="hint" style="margin:-4px 0 10px">Anyone with access — BD, your own team, the tender team, ' +
+        'the Founder\'s team. Whoever knows the subject.</p>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">' +
+          '<div class="field" style="flex:1;min-width:200px;margin:0"><select id="rdAssign">' +
+            opts(people.map(function (p) {
+              return { value: p.id, label: (p.full_name || p.email) +
+                (p.tender_role ? ' — ' + (WVT.ROLE_LABEL[p.tender_role] || p.tender_role) : '') };
+            }), r.assigned_to || '', 'Choose a person') +
+          '</select></div>' +
+          '<button class="btn sm primary" id="rdAssignSave">' +
+            (r.assigned_to ? 'Reassign' : 'Assign') + '</button>' +
+        '</div>' +
+        '<div class="banner" id="rdAssignBanner" style="display:none"></div>';
+    }
 
     var timeline = events.length ? events.map(function (e) {
       var bad = e.to_status === 'Rejected' || e.to_status === 'Changes Requested';
@@ -1053,6 +1093,7 @@
               '" data-rfpact="' + esc(a[0]) + '">' + esc(a[1]) + '</button>';
           }).join('') + '</div>'
         : '') +
+      assignBox +
       attach +
       '<div class="sec-title">Add a note</div>' +
       '<div class="field"><textarea id="rdNote" rows="2" placeholder="What changed, what is still needed"></textarea></div>' +
@@ -1069,9 +1110,8 @@
       if (why == null) return;
       body.reject_reason = String(why).trim() || null;
     }
-    /* Accepting no longer self-assigns: the VP and Founder decide who works on
-       it, and the database would strip a self-assignment anyway. */
-    if (toStatus === 'Accepted' && WVT.canAssignRfp()) body.assigned_to = String(WV.currentUser.id);
+    /* Accepting does NOT assign anybody. The VP accepts the request, then
+       chooses who does the work - two separate acts, because they are. */
     if (toStatus === 'Delivered' || toStatus === 'Revised') {
       var cur = 0;
       WVT.data.rfps.forEach(function (r) { if (String(r.id) === String(id)) cur = Number(r.current_version || 0); });
@@ -2340,6 +2380,18 @@
         if (!cr.ok) return WV.toast(cr.error);
         WV.toast('Comment posted');
         state.detailTab = 'talk'; renderDetail();
+        return;
+      }
+      if (e.target.id === 'rdAssignSave') {
+        var who = $('rdAssign') ? $('rdAssign').value : '';
+        if (!who) return banner('rdAssignBanner', 'Choose who should do it.', 'bad');
+        e.target.disabled = true;
+        var asr = await WVT.saveRfp({ assigned_to: who }, state.rfpDetailId);
+        e.target.disabled = false;
+        if (!asr.ok) return banner('rdAssignBanner', 'Could not assign: ' + asr.error, 'bad');
+        WV.toast('Given to ' + WVT.personName(who));
+        await refresh();
+        await openRfpDetail(state.rfpDetailId);
         return;
       }
       if (e.target.id === 'rdAttach') {

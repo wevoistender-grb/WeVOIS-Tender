@@ -74,11 +74,26 @@ the dates were before is kept on the corrigendum, so the history survives.
 countdown chips that go amber at a week and red at three days. Anything past its
 date and still not filed is flagged at the top of the dashboard.
 
-**RFP requests** — anyone can ask the tender team to prepare a document. Every
-step is timestamped by the database: Requested → Accepted → In Preparation →
-Delivered → Changes Requested → Revised → Closed. The timeline is append-only,
-so who asked, who prepared it, how long it took and what changed is all on
-record. Overdue requests and average turnaround show on the dashboard.
+**RFP requests** — anyone can ask for a document to be prepared. Two jobs, and
+they are not the same person:
+
+- The **VP or Founder** receives the request and does one of three things:
+  **Accept**, **Put on hold**, or **Reject**. Accepting does not assign anyone.
+- Then they **hand it to a person** — anyone with access, whatever team they sit
+  in: BD, their own team, the tender team, the Founder's team. Whoever knows the
+  subject.
+- That person does the work: In Preparation → Delivered → Revised, and attaches
+  the copy.
+
+The VP is the vice president of the company; he is not going to sit and write
+the RFP. So he is never offered "start preparing" or the attach-a-copy box, and
+the preparer is never offered accept or reject.
+
+Every step is timestamped by the database and the timeline is append-only, so
+who asked, who decided, who prepared it, how long it took and what changed is
+all on record. A request put on hold records when — a request parked in March
+and forgotten is invisible otherwise. Overdue requests and average turnaround
+show on the dashboard.
 
 **Document vault** — the master copies every bid draws on, with expiry dates.
 Anything expiring within 60 days surfaces on the dashboard; anything already

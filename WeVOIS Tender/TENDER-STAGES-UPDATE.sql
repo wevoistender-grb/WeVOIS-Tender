@@ -3,7 +3,7 @@
 --
 --  Run this on a database that already has TENDER-SETUP.sql in it.
 --  It is idempotent: run it as many times as you like. If you already ran an
---  earlier copy of this file, run it again - sections 7, 9, 10, 11 and 12 are new.
+--  earlier copy of this file, run it again - sections 7 and 9 to 13 are new.
 --
 --  Paste the WHOLE file into the Supabase SQL editor and select all of it
 --  (Ctrl+A) before pressing Run. The editor executes only the selection, and
@@ -808,9 +808,57 @@ create policy tender_files_update on storage.objects for update to authenticated
     )
   );
 
+-- ---------------------------------------------------------------------------
+--  13. PUT ON HOLD
+--
+--  The VP is the vice president of the company. He is not going to sit and
+--  write the RFP. A request reaches him and he does one of three things:
+--  accept it, park it, or reject it. Then he hands the work to somebody.
+--
+--  'On Hold' was missing entirely - the only choices were accept or reject,
+--  which forces a decision that is not ready to be made.
+--
+--  It needs its own timestamp for the same reason every other wait here has
+--  one: a request parked in March and forgotten is invisible unless you can
+--  ask how long it has been parked.
+-- ---------------------------------------------------------------------------
+alter table public.tender_rfp_requests add column if not exists held_at timestamptz;
+
+comment on column public.tender_rfp_requests.held_at is
+  'When it was last put on hold. Cleared when it moves on, so "is it parked, and since when" is one column.';
+
+create or replace function public.wv_rfp_stamp()
+returns trigger language plpgsql set search_path = public as $$
+begin
+  if new.status = 'Accepted'          and new.accepted_at         is null then new.accepted_at         := now(); end if;
+  if new.status = 'In Preparation'    and new.started_at          is null then new.started_at          := now(); end if;
+  if new.status = 'Delivered'         and new.delivered_at        is null then new.delivered_at        := now(); end if;
+  if new.status = 'Changes Requested'                                     then new.change_requested_at := now(); end if;
+  if new.status = 'Revised'                                               then new.revised_at          := now(); end if;
+  if new.status = 'Closed'            and new.closed_at           is null then new.closed_at           := now(); end if;
+  if new.status = 'Rejected'          and new.rejected_at         is null then new.rejected_at         := now(); end if;
+
+  -- Held is the one status you can come back OUT of and go into again, so it
+  -- is stamped on every entry and cleared on the way out, rather than being
+  -- written once like the milestones above.
+  if new.status = 'On Hold' then
+    if tg_op = 'INSERT' or old.status is distinct from 'On Hold' then
+      new.held_at := now();
+    end if;
+  else
+    new.held_at := null;
+  end if;
+
+  return new;
+end $$;
+
+drop trigger if exists rfp_stamp on public.tender_rfp_requests;
+create trigger rfp_stamp before insert or update on public.tender_rfp_requests
+  for each row execute function public.wv_rfp_stamp();
+
 -- ===========================================================================
---  13. VERIFICATION
---  Expect:  2 - 1 - true - true - 0 - 4 - true - 2 - 1 - true - true - true - 5 - true - 2
+--  14. VERIFICATION
+--  Expect:  2 - 1 - true - true - 0 - 4 - true - 2 - 1 - true - true - true - 5 - true - 2 - 1
 --  new tender columns, the corrigenda table, RLS on it, the result trigger,
 --  "no tender still carries the old 'Lost' result", the four EMD policies,
 --  the EMD permission function, the two new tables, the firm_id on EMD, and
@@ -864,4 +912,7 @@ select
   (select count(*) from information_schema.columns
     where table_schema='public' and column_name='file_url'
       and table_name in ('tender_rfp_requests','tender_rfp_events')
-  ) as rfp_link_columns;
+  ) as rfp_link_columns,
+  (select count(*) from information_schema.columns
+    where table_schema='public' and table_name='tender_rfp_requests' and column_name='held_at'
+  ) as hold_column;

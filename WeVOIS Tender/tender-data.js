@@ -86,10 +86,12 @@
   WVT.CHECK_STATUS   = ['Pending', 'Requested', 'Received', 'Attached', 'Not Applicable'];
 
   WVT.RFP_STATUS = [
-    'Requested', 'Accepted', 'In Preparation', 'Delivered',
+    'Requested', 'On Hold', 'Accepted', 'In Preparation', 'Delivered',
     'Changes Requested', 'Revised', 'Closed', 'Rejected'
   ];
-  WVT.RFP_OPEN    = ['Requested', 'Accepted', 'In Preparation', 'Changes Requested'];
+  /* 'On Hold' counts as open: parked is not finished, and a request nobody has
+     answered should keep showing up until somebody does. */
+  WVT.RFP_OPEN    = ['Requested', 'On Hold', 'Accepted', 'In Preparation', 'Changes Requested'];
   WVT.RFP_TYPES   = ['RFP', 'Technical Bid', 'Financial Bid', 'Affidavit', 'Undertaking', 'Other'];
   WVT.PRIORITIES  = ['Low', 'Normal', 'High', 'Urgent'];
 
@@ -257,6 +259,18 @@
 
   /* The gate. Nothing is filed and no money moves until the answer is Go. */
   WVT.isApproved = function (t) { return !!t && t.go_no_go === 'Go'; };
+
+  /* Who an RFP request can be given to.
+   *
+   * ANYONE with tender access, whatever team they sit in - BD, the VP's own
+   * team, the tender team, the Founder's team. The person who prepares a
+   * document is chosen for knowing the subject, not for their reporting line,
+   * so restricting this list to the tender team was simply wrong. */
+  WVT.assignableProfiles = function () {
+    return WVT.profiles.filter(function (p) {
+      return p.tender_access && String(p.status || 'active').toLowerCase() !== 'inactive';
+    });
+  };
 
   /* Who hands an RFP request to a person. The business put this with the VP
      and the Founder specifically, not with all of leadership. */
@@ -1216,7 +1230,7 @@
     var s = status || 'Requested';
     var cls = 'b-open';
     if (s === 'Delivered' || s === 'Closed' || s === 'Revised') cls = 'b-paid';
-    if (s === 'Rejected' || s === 'Changes Requested') cls = 'b-hold';
+    if (s === 'Rejected' || s === 'Changes Requested' || s === 'On Hold') cls = 'b-hold';
     return '<span class="badge ' + cls + '">' + WV.esc(s) + '</span>';
   };
 
