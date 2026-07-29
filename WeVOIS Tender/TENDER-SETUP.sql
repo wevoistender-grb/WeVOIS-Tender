@@ -573,6 +573,27 @@ returns boolean language sql security definer stable set search_path = public as
   );
 $$;
 
+-- Who may record money movements.
+--
+-- EMD, bank guarantees and fees are real cash leaving the company and coming
+-- back. A wrong refund date is a real problem, so this is deliberately NARROWER
+-- than "can see the tender": only the Tender Team records payments.
+--
+-- The administrator is included as a safety valve. Without it, deactivating the
+-- last tender-team account would leave nobody able to correct a mistake except
+-- through the SQL editor.
+create or replace function public.wv_can_edit_emd()
+returns boolean language sql security definer stable set search_path = public as $$
+  select exists (
+    select 1
+      from public.user_profiles p
+     where p.id = auth.uid()::text
+       and coalesce(p.status,'active') <> 'inactive'
+       and ( p.role = 'admin'
+             or ( coalesce(p.tender_access, false) and p.tender_role = 'tender_team' ) )
+  );
+$$;
+
 -- The core visibility rule: team AND region must both match.
 -- A user with no regions set is treated as covering every region.
 create or replace function public.wv_can_see_tender(p_team text, p_region text)
@@ -752,10 +773,32 @@ create policy tenders_delete on public.tenders for delete to authenticated
   using (public.is_admin() or public.wv_tender_is_global());
 
 -- Child tables inherit the parent tender's visibility.
-drop policy if exists temd_all on public.tender_emd;
-create policy temd_all on public.tender_emd for all to authenticated
-  using (exists (select 1 from public.tenders t where t.id = tender_id))
-  with check (exists (select 1 from public.tenders t where t.id = tender_id));
+-- EMD is the one child table that is NOT "see it, edit it". Everyone who can
+-- see the tender reads its payments; only the tender team (and an admin) may
+-- write them. Split into four policies because a single `for all` would hand
+-- write access to every reader.
+drop policy if exists temd_all    on public.tender_emd;
+drop policy if exists temd_read   on public.tender_emd;
+drop policy if exists temd_insert on public.tender_emd;
+drop policy if exists temd_update on public.tender_emd;
+drop policy if exists temd_delete on public.tender_emd;
+
+create policy temd_read on public.tender_emd for select to authenticated
+  using (exists (select 1 from public.tenders t where t.id = tender_id));
+
+create policy temd_insert on public.tender_emd for insert to authenticated
+  with check (public.wv_can_edit_emd()
+              and exists (select 1 from public.tenders t where t.id = tender_id));
+
+create policy temd_update on public.tender_emd for update to authenticated
+  using       (public.wv_can_edit_emd()
+               and exists (select 1 from public.tenders t where t.id = tender_id))
+  with check  (public.wv_can_edit_emd()
+               and exists (select 1 from public.tenders t where t.id = tender_id));
+
+create policy temd_delete on public.tender_emd for delete to authenticated
+  using (public.wv_can_edit_emd()
+         and exists (select 1 from public.tenders t where t.id = tender_id));
 
 drop policy if exists tchk_all on public.tender_checklist;
 create policy tchk_all on public.tender_checklist for all to authenticated
@@ -822,9 +865,167 @@ create policy audit_read   on public.activity_logs for select to authenticated u
 create policy audit_insert on public.activity_logs for insert to authenticated with check (true);
 
 
+-- ---------------------------------------------------------------------------
+--  9. FIRMS AND PER-FIRM BIDS
+--
+--  WeVois enters the same tender through several of its firms - two to five is
+--  normal. Each firm files its own proposal, pays its own EMD, gets its own
+--  rank, and one of them may win. The refunds all come back to WeVois, and the
+--  tender team updates them.
+--
+--  Why firms are a master list and not a text box: a work order and, later, an
+--  experience certificate are held by ONE named firm, and a municipal tender
+--  only lets you cite experience the BIDDING firm holds. "WeVois Enviro Pvt
+--  Ltd" and "Wevois Enviro Pvt. Ltd." typed on different days would become two
+--  firms, and every eligibility check after that would be quietly wrong.
+--
+--  Where the outcome lives: the TENDER keeps the overall Awarded / Not Awarded,
+--  because that is the question the dashboard asks. The BID keeps the quote,
+--  the rank and that firm's own result. The tender's quoted_value and our_rank
+--  stay for tenders entered by a single firm with no bid rows.
+-- ---------------------------------------------------------------------------
+
+create table if not exists public.tender_firms (
+  id          text primary key default gen_random_uuid()::text,
+  name        text not null,
+  short_name  text,
+  gst_no      text,
+  pan_no      text,
+  notes       text,
+  status      text not null default 'active',   -- active | inactive
+  sort        integer not null default 100,
+  created_by  text,
+  created_at  timestamptz not null default now()
+);
+
+comment on table public.tender_firms is
+  'The companies WeVois bids through. Work orders and experience certificates are held by exactly one of these, which is why it is a controlled list rather than free text.';
+
+-- Case-insensitive, so "WeVois Enviro" cannot be added twice in different case.
+create unique index if not exists tfirms_name_uidx on public.tender_firms (lower(name));
+
+
+create table if not exists public.tender_bids (
+  id                text primary key default gen_random_uuid()::text,
+  tender_id         text not null references public.tenders(id)      on delete cascade,
+  firm_id           text not null references public.tender_firms(id) on delete restrict,
+  quoted_value      numeric,
+  our_rank          text,                    -- L1, L2, ...
+  result            text not null default 'Pending',
+  result_date       date,
+  loss_reason       text,
+  loss_reason_notes text,
+  remarks           text,
+  created_by        text,
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now()
+);
+
+comment on table public.tender_bids is
+  'One row per firm entered into a tender. A firm can only enter a given tender once.';
+
+-- A firm cannot bid the same tender twice. This is a real-world rule, so the
+-- database holds it rather than the interface.
+create unique index if not exists tbids_tender_firm_uidx on public.tender_bids (tender_id, firm_id);
+create index if not exists tbids_tender_idx on public.tender_bids (tender_id);
+create index if not exists tbids_firm_idx   on public.tender_bids (firm_id);
+
+-- on delete restrict above is deliberate: deleting a firm that has bids against
+-- it would silently orphan the history of who bid what. Deactivate it instead.
+
+
+-- Whose money a payment was. Null means "not attributed to a firm" - which is
+-- what every existing row becomes, and is correct: they were recorded before
+-- firms existed.
+alter table public.tender_emd add column if not exists firm_id text
+  references public.tender_firms(id) on delete set null;
+
+create index if not exists temd_firm_idx on public.tender_emd (firm_id);
+
+
+-- ---------------------------------------------------------------------------
+--  Who is the tender team
+--
+--  wv_can_edit_emd() already answers this, but its name is about money. Firms
+--  are master data, not money, so the underlying test gets its own honest name
+--  and wv_can_edit_emd() is redefined to call it. One rule, two readable names,
+--  no chance of them drifting apart.
+-- ---------------------------------------------------------------------------
+create or replace function public.wv_is_tender_team()
+returns boolean language sql security definer stable set search_path = public as $$
+  select exists (
+    select 1
+      from public.user_profiles p
+     where p.id = auth.uid()::text
+       and coalesce(p.status,'active') <> 'inactive'
+       and ( p.role = 'admin'
+             or ( coalesce(p.tender_access, false) and p.tender_role = 'tender_team' ) )
+  );
+$$;
+
+create or replace function public.wv_can_edit_emd()
+returns boolean language sql security definer stable set search_path = public as $$
+  select public.wv_is_tender_team();
+$$;
+
+
+alter table public.tender_firms enable row level security;
+alter table public.tender_bids  enable row level security;
+
+-- Firms: everyone with tender access reads them - you cannot pick a firm from a
+-- dropdown you cannot see. Only the tender team maintains the list.
+drop policy if exists tfirms_read  on public.tender_firms;
+drop policy if exists tfirms_write on public.tender_firms;
+
+create policy tfirms_read on public.tender_firms for select to authenticated
+  using (public.wv_has_tender_access());
+
+create policy tfirms_write on public.tender_firms for all to authenticated
+  using (public.wv_is_tender_team()) with check (public.wv_is_tender_team());
+
+-- Bids follow the tender's own rule: if you can see the tender you can see and
+-- edit which firms entered it and what they quoted. Only the MONEY was
+-- restricted to the tender team, not the bid detail.
+drop policy if exists tbids_all on public.tender_bids;
+create policy tbids_all on public.tender_bids for all to authenticated
+  using      (exists (select 1 from public.tenders t where t.id = tender_id))
+  with check (exists (select 1 from public.tenders t where t.id = tender_id));
+
+
+-- ---------------------------------------------------------------------------
+--  A bid's loss reason, kept honest
+--
+--  Same rule as the tender-level trigger: a reason for losing, attached to
+--  something that was not lost, is noise that skews the why-we-lose reporting.
+-- ---------------------------------------------------------------------------
+create or replace function public.wv_bid_sync()
+returns trigger language plpgsql as $fn$
+begin
+  if new.result in ('Awarded', 'Not Awarded') and new.result_date is null then
+    new.result_date := current_date;
+  end if;
+
+  if new.result is distinct from 'Not Awarded' then
+    new.loss_reason       := null;
+    new.loss_reason_notes := null;
+  end if;
+
+  if tg_op = 'UPDATE' then
+    new.updated_at := now();
+  end if;
+
+  return new;
+end
+$fn$;
+
+drop trigger if exists tender_bids_sync on public.tender_bids;
+create trigger tender_bids_sync
+  before insert or update on public.tender_bids
+  for each row execute function public.wv_bid_sync();
+
 -- ===========================================================================
---  SECTION 9 - VERIFICATION
---  Expect:  13  -  3  -  7  -  23  -  13  -  true
+--  SECTION 10 - VERIFICATION
+--  Expect:  15  -  3  -  7  -  23  -  15  -  true
 --  tables, regions, org units, standard documents, RLS-protected tables,
 --  and "the system is brand new, go and create the first administrator".
 -- ===========================================================================
@@ -834,7 +1035,8 @@ select
       and table_name in ('user_profiles','tender_regions','tender_teams','tenders',
                          'tender_emd','tender_company_docs','tender_checklist',
                          'tender_rfp_requests','tender_rfp_events','tender_comments',
-                         'tender_corrigenda','notifications','activity_logs')
+                         'tender_corrigenda','tender_firms','tender_bids',
+                         'notifications','activity_logs')
   ) as tables_found,
   (select count(*) from public.tender_regions)      as regions_seeded,
   (select count(*) from public.tender_teams)        as org_units_seeded,

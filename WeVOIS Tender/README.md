@@ -36,6 +36,34 @@ Wrong documents uploaded, or Other with a note. That is the only way the pattern
 in why you lose ever becomes visible. Move a tender back out of an outcome
 stage and the recorded result clears itself, so nothing stale is left behind.
 
+**Firms and per-firm bids** — WeVois enters the same tender through two to five
+of its companies. Each firm files its own proposal, quotes its own number, gets
+its own rank, pays its own EMD, and one of them may win. Record the firms once
+under Team & access, then enter them against a tender on the **Firms & bids**
+tab. A firm can only enter a given tender once — the database enforces that.
+
+Once firms are entered, the quote and rank move off the tender onto each firm,
+because three firms quote three different numbers and leaving both places
+editable would guarantee they drift. A tender bid by a single firm needs no bid
+rows at all and works exactly as before.
+
+Why a fixed list and not a typed name: a work order, and later an experience
+certificate, is held by **one named firm**, and a municipal tender only lets you
+cite experience the *bidding* firm holds. "WeVois Enviro Pvt Ltd" and "Wevois
+Enviro Pvt. Ltd." typed on different days would become two firms, and every
+eligibility check after that would be quietly wrong.
+
+**EMD and fees** — every payment records **whose money it was**. All the refunds
+come back to WeVois, but each has to be chased in the name of the firm that paid
+it, so the EMD tab totals still-out, refunded and forfeited **per firm** as well
+as overall. Payments recorded before firms existed show as *not attributed*
+rather than being guessed at.
+
+Only the **Tender Team** (and an administrator) can add, change or delete a
+payment. Everyone who can see a tender still reads its EMD — the Founder and VP
+watch the amounts, they just do not change them. That is a database rule, not a
+hidden button.
+
 **Corrigenda** — amendments the authority issues against a live tender. Not a
 stage: one can arrive at any point and the tender carries on from wherever it
 was. Record it with the dates it revised, and those dates are applied to the
@@ -59,10 +87,6 @@ pre-loaded from the vault.
 
 **Per-tender checklist** — what that tender demands, who is preparing each item,
 and what is still missing, with a progress bar on every row of the tender list.
-
-**EMD and fees** — what was paid, how, when, when the refund is due and whether
-it came back. Money still out, refunded, forfeited and refunds due soon are
-totalled on their own tab.
 
 **Tender notice auto-read** — upload the PDF and the NIT number, authority,
 estimated cost, EMD, fees, all five key dates and the contract period fill

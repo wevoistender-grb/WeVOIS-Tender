@@ -118,7 +118,8 @@
 
   WVT.data = {
     teams: [], regions: [], tenders: [], emd: [], checklist: [],
-    companyDocs: [], rfps: [], events: [], comments: [], corrigenda: []
+    companyDocs: [], rfps: [], events: [], comments: [], corrigenda: [],
+    firms: [], bids: []
   };
 
   WVT.me = null;      // the user_profiles row, with the tender columns
@@ -220,6 +221,32 @@
   /* Only the tender team (and admins) work on RFP requests. */
   WVT.isPreparer = function () {
     return WVT.isAdmin() || (WVT.me && WVT.me.tender_role === 'tender_team');
+  };
+
+  /* Who may record money movements.
+   *
+   * EMD, bank guarantees and fees are real cash leaving the company and coming
+   * back, so this is deliberately NARROWER than "can see the tender": only the
+   * tender team writes payments. Everyone who can see a tender still READS its
+   * EMD - the founder and VP watch the amounts, they just do not change them.
+   *
+   * The admin is included as a safety valve: without it, deactivating the last
+   * tender-team account would leave nobody able to fix a wrong refund date.
+   *
+   * Kept separate from isPreparer() even though the test is the same today, so
+   * that changing who prepares RFPs cannot silently change who moves money.
+   *
+   * This mirrors wv_can_edit_emd() in the database, which is the real guard.
+   * Hiding a button is courtesy, not security. */
+  WVT.canEditEmd = function () { return WVT.isTenderTeam(); };
+
+  /* The same test under an honest name, because it also governs the firm list -
+     which is master data, not money. Mirrors wv_is_tender_team() in the
+     database. One rule, two readable names, no chance of them drifting. */
+  WVT.isTenderTeam = function () {
+    if (WVT.isAdmin()) return true;
+    var me = WVT.me;
+    return !!(me && me.tender_access && me.tender_role === 'tender_team');
   };
 
   /* ==========================================================================
@@ -333,7 +360,9 @@
       safe(sb.from('tender_rfp_requests').select('*').order('requested_at', { ascending: false }), []),
       safe(sb.from('tender_comments').select('*').order('created_at', { ascending: false }), []),
       safe(sb.from('user_profiles').select('id,full_name,email,role,tender_team_id,tender_role,tender_region_ids,tender_access,status').order('full_name'), []),
-      safe(sb.from('tender_corrigenda').select('*').order('issued_date', { ascending: false, nullsFirst: false }), [])
+      safe(sb.from('tender_corrigenda').select('*').order('issued_date', { ascending: false, nullsFirst: false }), []),
+      safe(sb.from('tender_firms').select('*').order('sort').order('name'), []),
+      safe(sb.from('tender_bids').select('*').order('created_at'), [])
     ]);
 
     WVT.data.teams       = res[0];
@@ -346,6 +375,8 @@
     WVT.data.comments    = res[7];
     WVT.profiles         = res[8];
     WVT.data.corrigenda  = res[9];
+    WVT.data.firms       = res[10];
+    WVT.data.bids        = res[11];
     return WVT.data;
   };
 
@@ -450,6 +481,134 @@
     if (r.error) return { ok: false, error: r.error.message };
     WVT.data.comments.unshift(r.data);
     return { ok: true, row: r.data };
+  };
+
+  /* ==========================================================================
+     FIRMS AND PER-FIRM BIDS
+
+     WeVois enters the same tender through two to five of its firms. Each files
+     its own proposal, pays its own EMD, gets its own rank, and one may win.
+
+     Where the outcome lives: the TENDER keeps the overall Awarded / Not
+     Awarded, because that is what the dashboard counts. The BID keeps the
+     quote, the rank and that firm's own result. The tender's own quoted_value
+     and our_rank are still used when no bids are recorded - a tender entered by
+     a single firm needs no bid rows at all.
+     ========================================================================== */
+
+  WVT.firmById = function (id) {
+    if (!id) return null;
+    for (var i = 0; i < WVT.data.firms.length; i++) {
+      if (String(WVT.data.firms[i].id) === String(id)) return WVT.data.firms[i];
+    }
+    return null;
+  };
+
+  WVT.firmName = function (id) {
+    var f = WVT.firmById(id);
+    return f ? (f.short_name || f.name) : '—';
+  };
+
+  /* Inactive firms stay selectable on records that already use them, but are
+     not offered for anything new. */
+  WVT.activeFirms = function () {
+    return WVT.data.firms.filter(function (f) { return f.status !== 'inactive'; });
+  };
+
+  WVT.bidsFor = function (tenderId) {
+    var id = String(tenderId);
+    return WVT.data.bids.filter(function (b) { return String(b.tender_id) === id; })
+      .sort(function (a, b) {
+        return String(a.our_rank || 'zz').localeCompare(String(b.our_rank || 'zz'));
+      });
+  };
+
+  WVT.hasBids = function (tenderId) { return WVT.bidsFor(tenderId).length > 0; };
+
+  /* Which firms have not entered this tender yet - so the picker cannot offer a
+     duplicate the database would refuse anyway. */
+  WVT.firmsNotBidding = function (tenderId, exceptFirmId) {
+    var taken = {};
+    WVT.bidsFor(tenderId).forEach(function (b) {
+      if (String(b.firm_id) !== String(exceptFirmId || '')) taken[String(b.firm_id)] = 1;
+    });
+    return WVT.activeFirms().filter(function (f) { return !taken[String(f.id)]; });
+  };
+
+  WVT.saveFirm = async function (body, id) {
+    if (!id) body.created_by = String(WV.currentUser.id);
+    var r = id
+      ? await WV.sb.from('tender_firms').update(body).eq('id', String(id)).select().maybeSingle()
+      : await WV.sb.from('tender_firms').insert(body).select().maybeSingle();
+    if (r.error) {
+      /* The unique index is on lower(name), so a near-duplicate is caught by
+         the database rather than by a check the interface could get wrong. */
+      if (/tfirms_name_uidx|duplicate key/i.test(r.error.message)) {
+        return { ok: false, error: 'A firm with that name already exists.' };
+      }
+      return { ok: false, error: r.error.message };
+    }
+    return { ok: true, row: r.data };
+  };
+
+  WVT.deleteFirm = async function (id) {
+    var r = await WV.sb.from('tender_firms').delete().eq('id', String(id));
+    if (r.error) {
+      /* on delete restrict: a firm that has bid on something cannot be removed
+         without orphaning the record of who bid what. */
+      if (/foreign key|violates/i.test(r.error.message)) {
+        return { ok: false, error: 'This firm has bids against it. Mark it inactive instead — deleting it would erase the record of what it bid.' };
+      }
+      return { ok: false, error: r.error.message };
+    }
+    return { ok: true };
+  };
+
+  WVT.saveBid = async function (body, id) {
+    if (!id) body.created_by = String(WV.currentUser.id);
+    var r = id
+      ? await WV.sb.from('tender_bids').update(body).eq('id', String(id)).select().maybeSingle()
+      : await WV.sb.from('tender_bids').insert(body).select().maybeSingle();
+    if (r.error) {
+      if (/tbids_tender_firm_uidx|duplicate key/i.test(r.error.message)) {
+        return { ok: false, error: 'That firm is already entered into this tender.' };
+      }
+      return { ok: false, error: r.error.message };
+    }
+    return { ok: true, row: r.data };
+  };
+
+  WVT.deleteBid = async function (id) {
+    var r = await WV.sb.from('tender_bids').delete().eq('id', String(id));
+    return r.error ? { ok: false, error: r.error.message } : { ok: true };
+  };
+
+  /* EMD split by firm. tenderId omitted = company-wide.
+     Rows with no firm are grouped under a null id and labelled honestly rather
+     than being guessed at - every payment recorded before firms existed lands
+     there, and pretending otherwise would invent data. */
+  WVT.emdByFirm = function (tenderId) {
+    var rows = WVT.data.emd.filter(function (e) {
+      return !tenderId || String(e.tender_id) === String(tenderId);
+    });
+    var map = {};
+    rows.forEach(function (e) {
+      var k = e.firm_id ? String(e.firm_id) : '';
+      if (!map[k]) {
+        map[k] = {
+          firmId: e.firm_id || null,
+          name: e.firm_id ? WVT.firmName(e.firm_id) : 'Not attributed to a firm',
+          out: 0, refunded: 0, forfeited: 0, count: 0
+        };
+      }
+      var a = Number(e.amount || 0);
+      map[k].count++;
+      if (e.status === 'Paid' || e.status === 'Refund Due') map[k].out += a;
+      if (e.status === 'Refunded')  map[k].refunded  += a;
+      if (e.status === 'Forfeited') map[k].forfeited += a;
+    });
+    return Object.keys(map).map(function (k) { return map[k]; })
+      .sort(function (a, b) { return b.out - a.out; });
   };
 
   /* ==========================================================================

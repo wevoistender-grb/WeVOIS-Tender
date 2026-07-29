@@ -16,6 +16,9 @@
     editId: null,
     editEmdId: null,
     corrTenderId: null,
+    editFirmId: null,
+    bidTenderId: null,
+    editBidId: null,
     editDocId: null,
     editTeamId: null,
     editPersonId: null,
@@ -58,7 +61,7 @@
      back to the dashboard instead of back to the tender they were working on.
      So when one of these is stacked we close only the top one, and swallow the
      event before the global handler sees it. */
-  var STACKABLE = ['emdOverlay', 'rfpOverlay', 'corrOverlay'];
+  var STACKABLE = ['emdOverlay', 'rfpOverlay', 'corrOverlay', 'bidOverlay'];
 
   function detailOpen() {
     var el = $('detailOverlay');
@@ -445,6 +448,15 @@
     show('teOutcomeWrap', !!filed || won || lost);
     show('teLossWrap', lost);
 
+    /* Once firms are entered, the quote and the rank belong to a FIRM, not to
+       the tender - three firms quote three different numbers. Leaving both
+       places editable would guarantee they drift, so the tender's copies are
+       hidden and the bids tab becomes the single source. */
+    var perFirm = !!state.editId && WVT.hasBids(state.editId);
+    show('teQuotedWrap', !perFirm);
+    show('teRankWrap', !perFirm);
+    show('tePerFirmNote', perFirm);
+
     $('teLossNoteHint').textContent = val('teLossReason') === 'Other'
       ? 'Required, because "Other" on its own tells the next person nothing.'
       : ' ';
@@ -644,12 +656,13 @@
     WV.$$('#dTabs button').forEach(function (b) {
       b.setAttribute('aria-selected', b.getAttribute('data-d') === state.detailTab ? 'true' : 'false');
     });
-    ['info', 'check', 'emd', 'corr', 'rfp', 'talk'].forEach(function (k) {
+    ['info', 'check', 'bids', 'emd', 'corr', 'rfp', 'talk'].forEach(function (k) {
       show('d' + k.charAt(0).toUpperCase() + k.slice(1), k === state.detailTab);
     });
 
     if (state.detailTab === 'info')  renderDetailInfo(t);
     if (state.detailTab === 'check') renderDetailCheck(t);
+    if (state.detailTab === 'bids')  renderDetailBids(t);
     if (state.detailTab === 'emd')   renderDetailEmd(t);
     if (state.detailTab === 'corr')  renderDetailCorr(t);
     if (state.detailTab === 'rfp')   renderDetailRfp(t);
@@ -742,18 +755,23 @@
 
   function renderDetailEmd(t) {
     var rows = WVT.emdFor(t.id);
-    var editable = WVT.canEdit(t);
+    /* Money is tender-team-only, unlike everything else on this tender. The
+       founder and VP read these amounts; they do not change them. */
+    var editable = WVT.canEditEmd();
     var out = rows.filter(function (e) { return e.status === 'Paid' || e.status === 'Refund Due'; })
                   .reduce(function (a, e) { return a + Number(e.amount || 0); }, 0);
 
     var head = '<div class="card-head" style="margin-bottom:12px">' +
       '<div><b>' + esc(money(out)) + '</b> <span class="muted">still out</span></div>' +
-      (editable ? '<button class="btn sm primary" id="emdAdd">＋ Record a payment</button>' : '') + '</div>';
+      (editable
+        ? '<button class="btn sm primary" id="emdAdd">＋ Record a payment</button>'
+        : '<span class="muted">Only the tender team records payments</span>') + '</div>';
 
     $('dEmd').innerHTML = head + (rows.length
-      ? '<div class="tbl-wrap"><table><thead><tr><th>What</th><th>Amount</th><th>Mode</th><th>Paid</th><th>Status</th><th>Back on</th><th></th></tr></thead><tbody>' +
+      ? '<div class="tbl-wrap"><table><thead><tr><th>Firm</th><th>What</th><th>Amount</th><th>Mode</th><th>Paid</th><th>Status</th><th>Back on</th><th></th></tr></thead><tbody>' +
         rows.map(function (e) {
-          return '<tr><td>' + esc(e.kind) + '<div class="muted" style="font-size:11px">' + esc(e.instrument_no || '') + '</div></td>' +
+          return '<tr><td>' + (e.firm_id ? esc(WVT.firmName(e.firm_id)) : '<span class="muted">—</span>') + '</td>' +
+            '<td>' + esc(e.kind) + '<div class="muted" style="font-size:11px">' + esc(e.instrument_no || '') + '</div></td>' +
             '<td class="num">' + esc(money(e.amount)) + '</td><td>' + esc(e.mode || '—') + '</td>' +
             '<td>' + esc(WVT.fmtDate(e.paid_on)) + '</td>' +
             '<td>' + esc(e.status) + '</td>' +
@@ -1098,13 +1116,33 @@
       kpi('Refund due soon', dueSoon, 'within 30 days', 'var(--brand)')
     ].join('');
 
+    /* Per firm. They enter the same tender through several firms and every
+       refund comes back to WeVois, so "whose money is still out" is the
+       question that actually gets asked. Hidden entirely until firms are in
+       use, so it is not an empty box on day one. */
+    var byFirm = WVT.emdByFirm(null);
+    var showByFirm = byFirm.some(function (g) { return !!g.firmId; });
+    $('emdByFirm').innerHTML = showByFirm
+      ? '<div class="tbl-wrap"><table><thead><tr>' +
+        '<th>Firm</th><th>Payments</th><th>Still out</th><th>Refunded</th><th>Forfeited</th>' +
+        '</tr></thead><tbody>' + byFirm.map(function (g) {
+          return '<tr><td>' + (g.firmId ? esc(g.name) : '<span class="muted">' + esc(g.name) + '</span>') + '</td>' +
+            '<td>' + g.count + '</td>' +
+            '<td class="num">' + esc(money(g.out)) + '</td>' +
+            '<td class="num">' + esc(money(g.refunded)) + '</td>' +
+            '<td class="num">' + esc(money(g.forfeited)) + '</td></tr>';
+        }).join('') + '</tbody></table></div>'
+      : '';
+    show('emdByFirmCard', showByFirm);
+
     $('emdList').innerHTML = rows.length
       ? '<div class="tbl-wrap"><table><thead><tr>' +
-        '<th>Tender</th><th>What</th><th>Amount</th><th>Mode</th><th>Paid on</th><th>Refund due</th><th>Status</th><th></th>' +
+        '<th>Tender</th><th>Firm</th><th>What</th><th>Amount</th><th>Mode</th><th>Paid on</th><th>Refund due</th><th>Status</th><th></th>' +
         '</tr></thead><tbody>' + rows.map(function (e) {
           var t = WVT.tenderById(e.tender_id);
           var dd = WVT.daysTo(e.refund_due_on);
           return '<tr><td>' + esc(t ? t.title : 'Unknown tender') + '</td>' +
+            '<td>' + (e.firm_id ? esc(WVT.firmName(e.firm_id)) : '<span class="muted">—</span>') + '</td>' +
             '<td>' + esc(e.kind) + '</td>' +
             '<td class="num">' + esc(money(e.amount)) + '</td>' +
             '<td>' + esc(e.mode || '—') + '</td>' +
@@ -1113,9 +1151,235 @@
               (dd != null && dd < 0 && e.status !== 'Refunded'
                 ? ' <span class="age bad">' + Math.abs(dd) + 'd over</span>' : '') + '</td>' +
             '<td>' + esc(e.status) + '</td>' +
-            '<td><button class="btn sm" data-emdedit="' + esc(e.id) + '">Edit</button></td></tr>';
+            '<td>' + (WVT.canEditEmd()
+              ? '<button class="btn sm" data-emdedit="' + esc(e.id) + '">Edit</button>' : '') + '</td></tr>';
         }).join('') + '</tbody></table></div>'
       : empty(state.emdFilter === 'out' ? 'Nothing is outstanding.' : 'Nothing recorded yet.');
+  }
+
+  /* ========================================================================
+     FIRMS AND BIDS
+     ======================================================================== */
+
+  function renderFirms() {
+    var editable = WVT.isTenderTeam();
+    show('newFirmBtn', editable);
+    var rows = WVT.data.firms;
+
+    $('firmList').innerHTML = rows.length
+      ? '<div class="tbl-wrap"><table><thead><tr>' +
+        '<th>Firm</th><th>Short</th><th>GST</th><th>PAN</th><th>Bids</th><th>Status</th><th></th>' +
+        '</tr></thead><tbody>' + rows.map(function (f) {
+          var used = WVT.data.bids.filter(function (b) { return String(b.firm_id) === String(f.id); }).length;
+          return '<tr><td>' + esc(f.name) + '</td>' +
+            '<td>' + esc(f.short_name || '—') + '</td>' +
+            '<td>' + esc(f.gst_no || '—') + '</td>' +
+            '<td>' + esc(f.pan_no || '—') + '</td>' +
+            '<td>' + used + '</td>' +
+            '<td>' + (f.status === 'inactive'
+              ? '<span class="badge b-none">Inactive</span>'
+              : '<span class="badge b-paid">Active</span>') + '</td>' +
+            '<td>' + (editable ? '<button class="btn sm" data-firmedit="' + esc(f.id) + '">Edit</button>' : '') + '</td></tr>';
+        }).join('') + '</tbody></table></div>'
+      : empty(editable
+          ? 'No firms yet. Add the companies you bid through — a work order and an experience certificate are held by one named firm, and you can only cite experience the bidding firm holds.'
+          : 'No firms yet. The tender team maintains this list.');
+  }
+
+  function openFirmEditor(id) {
+    if (!WVT.isTenderTeam()) return WV.toast('Only the tender team maintains the firm list.');
+    state.editFirmId = id || null;
+    var f = id ? WVT.firmById(id) : null;
+    $('fmTitle').textContent = f ? 'Edit firm' : 'Add a firm';
+    $('fmStatus').innerHTML = opts(['active', 'inactive'].map(function (v) {
+      return { value: v, label: v === 'active' ? 'Active' : 'Inactive — do not offer for new bids' };
+    }), f ? f.status : 'active');
+    setVal('fmName', f && f.name);
+    setVal('fmShort', f && f.short_name);
+    setVal('fmGst', f && f.gst_no);
+    setVal('fmPan', f && f.pan_no);
+    setVal('fmNotes', f && f.notes);
+    show('fmDelete', !!f);
+    banner('fmBanner', '');
+    WV.openOverlay('firmOverlay');
+  }
+
+  async function saveFirm() {
+    var name = val('fmName');
+    if (!name) return banner('fmBanner', 'Enter the firm’s name.', 'bad');
+    var btn = $('fmSave');
+    btn.disabled = true;
+    var r = await WVT.saveFirm({
+      name: name,
+      short_name: val('fmShort') || null,
+      gst_no: val('fmGst') || null,
+      pan_no: val('fmPan') || null,
+      notes: val('fmNotes') || null,
+      status: val('fmStatus') || 'active'
+    }, state.editFirmId);
+    btn.disabled = false;
+    if (!r.ok) return banner('fmBanner', r.error, 'bad');
+    await WV.logActivity(state.editFirmId ? 'Firm updated' : 'Firm added', name);
+    WV.closeOverlays();
+    WV.toast('Saved');
+    await refresh();
+  }
+
+  async function deleteFirm() {
+    if (!state.editFirmId) return;
+    var f = WVT.firmById(state.editFirmId);
+    if (!window.confirm('Delete ' + (f ? f.name : 'this firm') + '?')) return;
+    var r = await WVT.deleteFirm(state.editFirmId);
+    if (!r.ok) return banner('fmBanner', r.error, 'bad');
+    WV.closeOverlays();
+    WV.toast('Firm deleted');
+    await refresh();
+  }
+
+  /* --- per-tender bids --- */
+
+  function renderDetailBids(t) {
+    var rows = WVT.bidsFor(t.id);
+    var editable = WVT.canEdit(t);
+    var anyFirms = WVT.data.firms.length > 0;
+
+    var head = '<div class="card-head" style="margin-bottom:12px">' +
+      '<div><b>' + rows.length + ' firm' + (rows.length === 1 ? '' : 's') + ' entered</b>' +
+      '<div class="muted" style="margin-top:4px">Each firm files its own proposal and pays its own EMD. ' +
+      'Record them here and the quote and rank move off the tender onto each firm.</div></div>' +
+      (editable && anyFirms ? '<button class="btn sm primary" id="bidAdd">＋ Add a firm</button>' : '') +
+      '</div>';
+
+    if (!anyFirms) {
+      $('dBids').innerHTML = head + empty(WVT.isTenderTeam()
+        ? 'No firms set up yet. Add them under Team & access first.'
+        : 'No firms set up yet. Ask the tender team to add them under Team & access.');
+      return;
+    }
+
+    var emdByFirm = {};
+    WVT.emdByFirm(t.id).forEach(function (g) { if (g.firmId) emdByFirm[String(g.firmId)] = g; });
+
+    var body = rows.length
+      ? '<div class="tbl-wrap"><table><thead><tr>' +
+        '<th>Firm</th><th>Quote</th><th>Rank</th><th>Result</th><th>Why not</th><th>EMD still out</th><th></th>' +
+        '</tr></thead><tbody>' + rows.map(function (b) {
+          var g = emdByFirm[String(b.firm_id)];
+          return '<tr>' +
+            '<td>' + esc(WVT.firmName(b.firm_id)) + '</td>' +
+            '<td class="num">' + esc(money(b.quoted_value)) + '</td>' +
+            '<td>' + esc(b.our_rank || '—') + '</td>' +
+            '<td>' + WVT.resultBadge(b.result) + '</td>' +
+            '<td>' + (b.result === 'Not Awarded'
+              ? esc(b.loss_reason || 'Not recorded') +
+                (b.loss_reason_notes ? ' <span class="muted">— ' + esc(b.loss_reason_notes) + '</span>' : '')
+              : '<span class="muted">—</span>') + '</td>' +
+            '<td class="num">' + (g && g.out ? esc(money(g.out)) : '<span class="muted">—</span>') + '</td>' +
+            '<td>' + (editable ? '<button class="btn sm" data-bidedit="' + esc(b.id) + '">Edit</button>' : '') + '</td>' +
+            '</tr>';
+        }).join('') + '</tbody></table></div>'
+      : empty('No firms entered yet. If only one firm bid, you can leave this empty and use the quote and rank on the tender itself.');
+
+    $('dBids').innerHTML = head + body;
+  }
+
+  function syncBidFields() {
+    var lost = val('bdResult') === 'Not Awarded';
+    show('bdLossWrap', lost);
+    $('bdLossHint').textContent = val('bdLossReason') === 'Other'
+      ? 'Required, because "Other" on its own tells the next person nothing.'
+      : ' ';
+  }
+
+  function openBidEditor(tenderId, bidId) {
+    var t = WVT.tenderById(tenderId);
+    if (!t) return;
+    if (!WVT.canEdit(t)) return WV.toast('You cannot edit this tender.');
+
+    state.bidTenderId = tenderId;
+    state.editBidId = bidId || null;
+    var b = null;
+    if (bidId) {
+      for (var i = 0; i < WVT.data.bids.length; i++) {
+        if (String(WVT.data.bids[i].id) === String(bidId)) { b = WVT.data.bids[i]; break; }
+      }
+    }
+
+    $('bdTitle').textContent = b ? 'Edit this firm’s bid' : 'Add a firm to this tender';
+    $('bdSub').textContent = t.title;
+
+    /* Only firms not already entered, so the picker cannot offer something the
+       database would refuse. */
+    var choices = WVT.firmsNotBidding(tenderId, b && b.firm_id);
+    $('bdFirm').innerHTML = opts(
+      choices.map(function (f) { return { value: f.id, label: f.name }; }),
+      b ? b.firm_id : '', 'Choose a firm');
+    $('bdFirmHint').textContent = choices.length
+      ? ''
+      : 'Every active firm is already entered into this tender.';
+
+    $('bdResult').innerHTML     = opts(WVT.RESULTS, b ? b.result : 'Pending');
+    $('bdLossReason').innerHTML = opts(WVT.LOSS_REASONS, b ? b.loss_reason : '', 'Choose a reason');
+    setVal('bdQuote', b && b.quoted_value);
+    setVal('bdRank', b && b.our_rank);
+    setVal('bdResultDate', b && b.result_date);
+    setVal('bdLossNotes', b && b.loss_reason_notes);
+    setVal('bdRemarks', b && b.remarks);
+    show('bdDelete', !!b);
+    syncBidFields();
+    banner('bdBanner', '');
+    WV.openOverlay('bidOverlay');
+  }
+
+  async function saveBid() {
+    if (!val('bdFirm')) return banner('bdBanner', 'Choose which firm this is.', 'bad');
+    var result = val('bdResult') || 'Pending';
+    var body = {
+      tender_id: String(state.bidTenderId),
+      firm_id: val('bdFirm'),
+      quoted_value: numOrNull('bdQuote'),
+      our_rank: val('bdRank') || null,
+      result: result,
+      result_date: dateOrNull('bdResultDate'),
+      remarks: val('bdRemarks') || null
+    };
+    if (result === 'Not Awarded') {
+      if (!val('bdLossReason')) {
+        return banner('bdBanner', 'Choose why this firm did not win.', 'bad');
+      }
+      if (val('bdLossReason') === 'Other' && !val('bdLossNotes')) {
+        return banner('bdBanner', '"Other" needs a note, otherwise it tells the next person nothing.', 'bad');
+      }
+      body.loss_reason = val('bdLossReason');
+      body.loss_reason_notes = val('bdLossNotes') || null;
+    } else {
+      body.loss_reason = null;
+      body.loss_reason_notes = null;
+    }
+
+    var btn = $('bdSave');
+    btn.disabled = true;
+    var r = await WVT.saveBid(body, state.editBidId);
+    btn.disabled = false;
+    if (!r.ok) return banner('bdBanner', r.error, 'bad');
+
+    await WV.logActivity(state.editBidId ? 'Bid updated' : 'Firm entered into tender',
+      WVT.firmName(body.firm_id), state.bidTenderId);
+    closeTop('bidOverlay');
+    WV.toast('Saved');
+    await refresh();
+    if (state.detailId) { state.detailTab = 'bids'; renderDetail(); }
+  }
+
+  async function deleteBid() {
+    if (!state.editBidId) return;
+    if (!window.confirm('Remove this firm from the tender? Its EMD records stay, but will no longer sit against a bid.')) return;
+    var r = await WVT.deleteBid(state.editBidId);
+    if (!r.ok) return banner('bdBanner', r.error, 'bad');
+    closeTop('bidOverlay');
+    WV.toast('Removed');
+    await refresh();
+    if (state.detailId) { state.detailTab = 'bids'; renderDetail(); }
   }
 
   /* ========================================================================
@@ -1225,6 +1489,12 @@
   }
 
   function openEmdEditor(tenderId, emdId) {
+    /* Belt to the database's braces. A page left open while someone's access
+       is changed would otherwise reach a save and get a raw RLS error, which
+       reads like a bug rather than a rule. */
+    if (!WVT.canEditEmd()) {
+      return WV.toast('Only the tender team can record EMD and fees.');
+    }
     state.editEmdId = emdId || null;
     state.emdTenderId = tenderId || null;
     var e = null;
@@ -1237,6 +1507,17 @@
     var t = WVT.tenderById(state.emdTenderId);
     $('eeTitle').textContent = e ? 'Edit payment' : 'Record a payment';
     $('eeSub').textContent = t ? t.title : '';
+    /* Only firms that entered this tender, plus whoever is already on the row.
+       Offering every firm would invite attributing a payment to a firm that
+       never bid. */
+    var bidFirms = WVT.bidsFor(state.emdTenderId).map(function (b) { return b.firm_id; });
+    if (e && e.firm_id && bidFirms.indexOf(e.firm_id) < 0) bidFirms.push(e.firm_id);
+    var firmChoices = (bidFirms.length
+      ? bidFirms.map(function (id) { return WVT.firmById(id); }).filter(Boolean)
+      : WVT.activeFirms());
+    $('eeFirm').innerHTML = opts(
+      firmChoices.map(function (f) { return { value: f.id, label: f.name }; }),
+      e ? e.firm_id : '', 'Not attributed to a firm');
     $('eeKind').innerHTML   = opts(WVT.EMD_KINDS, e ? e.kind : 'EMD');
     $('eeMode').innerHTML   = opts(WVT.EMD_MODES, e ? e.mode : 'NEFT', 'Not stated');
     $('eeStatus').innerHTML = opts(WVT.EMD_STATUS, e ? e.status : 'Paid');
@@ -1254,11 +1535,15 @@
   }
 
   async function saveEmd() {
+    if (!WVT.canEditEmd()) {
+      return banner('eeBanner', 'Only the tender team can record EMD and fees.', 'bad');
+    }
     if (!state.emdTenderId) return banner('eeBanner', 'No tender selected.', 'bad');
     var amt = val('eeAmount');
     if (amt === '') return banner('eeBanner', 'Enter the amount.', 'bad');
     var body = {
       tender_id: String(state.emdTenderId),
+      firm_id: val('eeFirm') || null,
       kind: val('eeKind'),
       amount: Number(amt),
       mode: val('eeMode') || null,
@@ -1319,6 +1604,8 @@
             '<div class="s">' + n + ' tender' + (n === 1 ? '' : 's') + '</div></div></div>';
         }).join('')
       : empty('No regions yet.');
+
+    renderFirms();
 
     $('peopleList').innerHTML = '<div class="tbl-wrap"><table><thead><tr>' +
       '<th>Person</th><th>Billing role</th><th>Unit</th><th>Tender role</th><th>Regions</th><th>Access</th><th></th>' +
@@ -1828,6 +2115,16 @@
         if (state.detailId) { state.detailTab = 'check'; renderDetail(); }
         return;
       }
+      if ((el = e.target.closest('[data-firmedit]'))) {
+        return openFirmEditor(el.getAttribute('data-firmedit'));
+      }
+      if ((el = e.target.closest('[data-bidedit]'))) {
+        return openBidEditor(state.detailId, el.getAttribute('data-bidedit'));
+      }
+      if (e.target.id === 'bidAdd') {
+        if (state.detailId) openBidEditor(state.detailId, null);
+        return;
+      }
       if (e.target.id === 'corrAdd') {
         if (state.detailId) openCorrEditor(state.detailId);
         return;
@@ -1966,6 +2263,15 @@
       setVal('rgName', ''); banner('rgBanner', ''); WV.openOverlay('regionOverlay');
     });
     on('rgSave', 'click', saveRegion);
+
+    /* --- firms and bids --- */
+    on('newFirmBtn', 'click', function () { openFirmEditor(null); });
+    on('fmSave', 'click', saveFirm);
+    on('fmDelete', 'click', deleteFirm);
+    on('bdSave', 'click', saveBid);
+    on('bdDelete', 'click', deleteBid);
+    on('bdResult', 'change', syncBidFields);
+    on('bdLossReason', 'change', syncBidFields);
 
     /* --- corrigenda --- */
     on('coSave', 'click', saveCorrigendum);

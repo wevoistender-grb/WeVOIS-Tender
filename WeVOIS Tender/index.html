@@ -299,6 +299,14 @@
       </div>
       <div id="emdList"></div>
     </div>
+
+    <div class="card" id="emdByFirmCard" style="display:none">
+      <div class="card-head">
+        <div><h2>By firm</h2>
+          <p class="cap">Whose money is still out. Every refund comes back to us, but it has to be chased in the name of whoever paid it</p></div>
+      </div>
+      <div id="emdByFirm"></div>
+    </div>
   </section>
 
   <!-- ─────────── TEAM &amp; ACCESS ─────────── -->
@@ -319,6 +327,16 @@
         <div id="regionList"></div>
       </div>
     </div>
+    <div class="card">
+      <div class="card-head">
+        <div><h2>Our firms</h2>
+          <p class="cap">The companies we bid through. Work orders and experience certificates
+            are held by one named firm, so this is a fixed list rather than something typed each time</p></div>
+        <button class="btn sm" id="newFirmBtn">＋ Add firm</button>
+      </div>
+      <div id="firmList"></div>
+    </div>
+
     <div class="card">
       <div class="card-head">
         <div><h2>People</h2>
@@ -415,8 +433,12 @@
       <div id="teOutcomeWrap" style="display:none">
         <div class="sec-title">Outcome</div>
         <div class="form-grid">
-          <div class="field"><label for="teQuoted">Our quote (₹)</label><input id="teQuoted" type="number" min="0" step="1"></div>
-          <div class="field"><label for="teRank">Our rank</label><input id="teRank" type="text" placeholder="L1"></div>
+          <div class="field" id="teQuotedWrap"><label for="teQuoted">Our quote (₹)</label><input id="teQuoted" type="number" min="0" step="1"></div>
+          <div class="field" id="teRankWrap"><label for="teRank">Our rank</label><input id="teRank" type="text" placeholder="L1"></div>
+          <div class="field full" id="tePerFirmNote" style="display:none">
+            <div class="hint">Several firms are entered into this tender, so the quote and the rank
+              belong to each firm rather than to the tender. Set them on the <b>Firms &amp; bids</b> tab.</div>
+          </div>
           <div class="field"><label for="teResultDate">Result declared on</label><input id="teResultDate" type="date"></div>
           <div class="field"><label for="teAwardedTo">Awarded to</label><input id="teAwardedTo" type="text" placeholder="Whoever won it"></div>
           <div class="field"><label for="teAwardedValue">Awarded at (₹)</label><input id="teAwardedValue" type="number" min="0" step="1"></div>
@@ -460,6 +482,7 @@
       <div class="subtabs" id="dTabs">
         <button type="button" data-d="info"  aria-selected="true">Details</button>
         <button type="button" data-d="check" aria-selected="false">Checklist</button>
+        <button type="button" data-d="bids"  aria-selected="false">Firms &amp; bids</button>
         <button type="button" data-d="emd"   aria-selected="false">EMD &amp; fees</button>
         <button type="button" data-d="corr"  aria-selected="false">Corrigenda</button>
         <button type="button" data-d="rfp"   aria-selected="false">RFP requests</button>
@@ -467,6 +490,7 @@
       </div>
       <div id="dInfo"></div>
       <div id="dCheck" style="display:none"></div>
+      <div id="dBids"  style="display:none"></div>
       <div id="dEmd"   style="display:none"></div>
       <div id="dCorr"  style="display:none"></div>
       <div id="dRfp"   style="display:none"></div>
@@ -562,6 +586,8 @@
     <div class="modal-b">
       <div class="banner" id="eeBanner" style="display:none"></div>
       <div class="form-grid">
+        <div class="field full"><label for="eeFirm">Which firm's money</label><select id="eeFirm"></select>
+          <div class="hint">Leave blank only if it genuinely was not paid by one of our firms — the refund is tracked against whoever paid</div></div>
         <div class="field"><label for="eeKind">What</label><select id="eeKind"></select></div>
         <div class="field"><label for="eeAmount">Amount (₹) *</label><input id="eeAmount" type="number" min="0" step="1"></div>
         <div class="field"><label for="eeMode">Mode</label><select id="eeMode"></select></div>
@@ -579,6 +605,72 @@
       <button class="btn danger" id="eeDelete" style="display:none;margin-right:auto">Delete</button>
       <button class="btn" data-close>Cancel</button>
       <button class="btn primary" id="eeSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- A firm we bid through. Maintained by the tender team. -->
+<div class="overlay" id="firmOverlay">
+  <div class="modal">
+    <div class="modal-h">
+      <div><h3 id="fmTitle">Add a firm</h3><p>These names appear on work orders and experience certificates</p></div>
+      <button class="x" data-close>✕</button>
+    </div>
+    <div class="modal-b">
+      <div class="banner" id="fmBanner" style="display:none"></div>
+      <div class="form-grid">
+        <div class="field full"><label for="fmName">Full legal name *</label>
+          <input id="fmName" type="text" placeholder="WeVois Enviro Solutions Pvt Ltd">
+          <div class="hint">Exactly as it appears on the registration — this is what goes on a bid</div></div>
+        <div class="field"><label for="fmShort">Short name</label>
+          <input id="fmShort" type="text" placeholder="Enviro">
+          <div class="hint">Used in tables where the full name will not fit</div></div>
+        <div class="field"><label for="fmStatus">Status</label><select id="fmStatus"></select></div>
+        <div class="field"><label for="fmGst">GST no.</label><input id="fmGst" type="text"></div>
+        <div class="field"><label for="fmPan">PAN</label><input id="fmPan" type="text"></div>
+        <div class="field full"><label for="fmNotes">Notes</label><textarea id="fmNotes" rows="2"></textarea></div>
+      </div>
+    </div>
+    <div class="modal-f">
+      <button class="btn danger" id="fmDelete" style="display:none;margin-right:auto">Delete</button>
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn primary" id="fmSave">Save firm</button>
+    </div>
+  </div>
+</div>
+
+<!-- One firm's entry into a tender. Stacks on the tender file. -->
+<div class="overlay" id="bidOverlay">
+  <div class="modal">
+    <div class="modal-h">
+      <div><h3 id="bdTitle">Add a firm to this tender</h3><p id="bdSub"></p></div>
+      <button class="x" data-close>✕</button>
+    </div>
+    <div class="modal-b">
+      <div class="banner" id="bdBanner" style="display:none"></div>
+      <div class="form-grid">
+        <div class="field full"><label for="bdFirm">Firm *</label><select id="bdFirm"></select>
+          <div class="hint" id="bdFirmHint">&nbsp;</div></div>
+        <div class="field"><label for="bdQuote">This firm's quote (₹)</label><input id="bdQuote" type="number" min="0" step="1"></div>
+        <div class="field"><label for="bdRank">Its rank</label><input id="bdRank" type="text" placeholder="L1"></div>
+        <div class="field"><label for="bdResult">Result for this firm</label><select id="bdResult"></select></div>
+        <div class="field"><label for="bdResultDate">Declared on</label><input id="bdResultDate" type="date"></div>
+      </div>
+      <div id="bdLossWrap" style="display:none">
+        <div class="form-grid">
+          <div class="field"><label for="bdLossReason">Why this firm did not win *</label><select id="bdLossReason"></select></div>
+          <div class="field full"><label for="bdLossNotes">What happened</label>
+            <input id="bdLossNotes" type="text"><div class="hint" id="bdLossHint">&nbsp;</div></div>
+        </div>
+      </div>
+      <div class="form-grid">
+        <div class="field full"><label for="bdRemarks">Remarks</label><textarea id="bdRemarks" rows="2"></textarea></div>
+      </div>
+    </div>
+    <div class="modal-f">
+      <button class="btn danger" id="bdDelete" style="display:none;margin-right:auto">Remove</button>
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn primary" id="bdSave">Save</button>
     </div>
   </div>
 </div>

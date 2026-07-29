@@ -22,7 +22,7 @@ You should get exactly one row back:
 
 | tables_found | regions_seeded | org_units_seeded | standard_docs_seeded | rls_enabled | needs_first_run |
 |---|---|---|---|---|---|
-| 13 | 3 | 7 | 23 | 13 | true |
+| 15 | 3 | 7 | 23 | 15 | true |
 
 If any number differs, stop and check the error rather than carrying on.
 
@@ -43,11 +43,12 @@ keeps `result` in step with the Awarded / Not Awarded stages, and it backfills
 `submitted_at` for anything that had already reached a post-submission stage
 under the old ordered model. It is idempotent; running it twice is harmless.
 
-Expect the row:
+It also adds the firms and per-firm bid tables, and restricts EMD writing to the
+tender team. Expect the row:
 
-| new_tender_columns | corrigenda_table | corrigenda_rls | result_trigger | stale_lost_rows |
-|---|---|---|---|---|
-| 2 | 1 | true | true | 0 |
+| new_tender_columns | corrigenda_table | corrigenda_rls | result_trigger | stale_lost_rows | emd_policies | emd_guard_present | firm_tables | emd_firm_column | one_bid_per_firm |
+|---|---|---|---|---|---|---|---|---|---|
+| 2 | 1 | true | true | 0 | 4 | true | 2 | 1 | true |
 
 ## 3. Two settings in Supabase
 
