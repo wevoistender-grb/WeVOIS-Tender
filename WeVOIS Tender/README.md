@@ -93,6 +93,51 @@ estimated cost, EMD, fees, all five key dates and the contract period fill
 themselves in. It never overwrites anything you have already typed, and tells
 you exactly which fields it filled.
 
+## Who may change what
+
+Seeing a tender is not the same as being able to change it.
+
+| | Tender executives | VP · AVP · DGM · Founder | BD |
+|---|---|---|---|
+| See the tender and everything on it | yes | yes | yes |
+| Create a new tender | yes | — | **yes** |
+| Edit the tender after it exists | **yes** | no | no |
+| Stage, dates, scope, money | **yes** | no | no |
+| Checklist, corrigenda, firms & bids | **yes** | no | no |
+| EMD and fees | **yes** | no | no |
+| **Go / No-Go decision** | yes | **yes** | no |
+| Comment | yes | yes | yes |
+
+**Tender executives** are the Tender Team role. They do the work, so they own
+the file.
+
+**Leadership decides and then watches.** VP, AVP, DGM and the Founder get one
+control on a tender — the **Go / No-Go decision** — and read-only access to
+everything else. They see every amount, every date and every document; they
+just do not change them.
+
+**BD spots tenders and creates them**, then hands over. Note the consequence:
+once a BD person saves a tender they cannot correct a typo in it — they have to
+ask an executive. Say the word if you want that softened.
+
+This is enforced in PostgreSQL, not in the browser. Because a policy can only
+say yes or no to a whole row, the tender table carries a trigger that rebuilds
+the row from what it was and copies across only the Go / No-Go columns. Anything
+else a non-executive sends is put back. Written that way round on purpose: a
+column added to the table in future is protected automatically rather than
+being forgotten.
+
+### RFP requests are private
+
+An RFP request is visible **only** to the VP, the Founder, the person who raised
+it, and the person it was given to. Not to everyone who can see the tender, and
+not to the whole tender team — an executive sees only the requests assigned to
+them.
+
+Anyone with access can raise one. **Only the VP and the Founder decide who works
+on it.** Trying to assign one to yourself is stripped by the database, not just
+hidden in the interface.
+
 ## Who sees what
 
 A person sees a tender only when **both** are true:

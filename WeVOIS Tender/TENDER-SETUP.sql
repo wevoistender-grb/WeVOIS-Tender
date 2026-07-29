@@ -1023,8 +1023,184 @@ create trigger tender_bids_sync
   before insert or update on public.tender_bids
   for each row execute function public.wv_bid_sync();
 
+-- ---------------------------------------------------------------------------
+--  10. WHO MAY CHANGE WHAT
+--
+--  The rule the business asked for:
+--
+--    Tender executives (the Tender Team) are the ONLY people who edit a
+--    tender. They do the work, so they keep the file.
+--
+--    VP, AVP, DGM and the Founder are decision makers. They see everything
+--    they are entitled to see, and the one thing they change is the
+--    Go / No-Go decision. Not the stage, not the dates, not the money.
+--
+--    BD spots tenders and creates them. After that it is handed over.
+--
+--  Read access is untouched. This is only about writing.
+--
+--  Column-level rules cannot be expressed in a policy, because a policy can
+--  only say yes or no to the whole row. So the tender table gets a BEFORE
+--  UPDATE trigger that rebuilds the row from OLD and copies across only the
+--  Go / No-Go columns. Anything else a non-executive sends is silently put
+--  back. Written that way round on purpose: any column added to this table in
+--  future is protected automatically, instead of being forgotten.
+-- ---------------------------------------------------------------------------
+
+-- Decision makers. Deliberately does NOT include tender_team - this answers
+-- "is this person leadership", not "may this person decide".
+create or replace function public.wv_is_leadership()
+returns boolean language sql security definer stable set search_path = public as $$
+  select exists (
+    select 1 from public.user_profiles p
+     where p.id = auth.uid()::text
+       and coalesce(p.status,'active') <> 'inactive'
+       and coalesce(p.tender_access, false)
+       and p.tender_role in ('vp','avp','dgm','founder')
+  );
+$$;
+
+-- Who hands an RFP request to a person. The business put this with the VP and
+-- the Founder specifically, not with all of leadership.
+create or replace function public.wv_can_assign_rfp()
+returns boolean language sql security definer stable set search_path = public as $$
+  select exists (
+    select 1 from public.user_profiles p
+     where p.id = auth.uid()::text
+       and coalesce(p.status,'active') <> 'inactive'
+       and ( p.role = 'admin'
+             or ( coalesce(p.tender_access, false) and p.tender_role in ('vp','founder') ) )
+  );
+$$;
+
+
+-- --- the tender itself -------------------------------------------------------
+
+create or replace function public.wv_tenders_guard_update()
+returns trigger language plpgsql security definer set search_path = public as $fn$
+declare
+  kept public.tenders%rowtype;
+begin
+  -- Executives and administrators may change anything.
+  if public.wv_is_tender_team() then
+    return new;
+  end if;
+
+  -- Everyone else: start from the row as it was, and let through only the
+  -- Go / No-Go decision.
+  kept := old;
+  kept.go_no_go        := new.go_no_go;
+  kept.go_no_go_reason := new.go_no_go_reason;
+  kept.go_no_go_by     := new.go_no_go_by;
+  kept.go_no_go_at     := new.go_no_go_at;
+  kept.updated_at      := now();
+  return kept;
+end
+$fn$;
+
+-- Named to sort AFTER tenders_sync_result, so the guard has the last word:
+-- sync_result may derive a result from a stage the caller was not allowed to
+-- set, and the guard then puts both back.
+drop trigger if exists tenders_zz_guard_update on public.tenders;
+create trigger tenders_zz_guard_update
+  before update on public.tenders
+  for each row execute function public.wv_tenders_guard_update();
+
+
+-- --- the child tables --------------------------------------------------------
+-- "Only tender executives edit tender details" applies to everything hanging
+-- off the tender, not just the tender row. Reading is unchanged: if you can
+-- see the tender you can see its checklist, its bids and its corrigenda.
+
+drop policy if exists tchk_all    on public.tender_checklist;
+drop policy if exists tchk_read   on public.tender_checklist;
+drop policy if exists tchk_write  on public.tender_checklist;
+create policy tchk_read on public.tender_checklist for select to authenticated
+  using (exists (select 1 from public.tenders t where t.id = tender_id));
+create policy tchk_write on public.tender_checklist for all to authenticated
+  using       (public.wv_is_tender_team()
+               and exists (select 1 from public.tenders t where t.id = tender_id))
+  with check  (public.wv_is_tender_team()
+               and exists (select 1 from public.tenders t where t.id = tender_id));
+
+drop policy if exists tcorr_all   on public.tender_corrigenda;
+drop policy if exists tcorr_read  on public.tender_corrigenda;
+drop policy if exists tcorr_write on public.tender_corrigenda;
+create policy tcorr_read on public.tender_corrigenda for select to authenticated
+  using (exists (select 1 from public.tenders t where t.id = tender_id));
+create policy tcorr_write on public.tender_corrigenda for all to authenticated
+  using       (public.wv_is_tender_team()
+               and exists (select 1 from public.tenders t where t.id = tender_id))
+  with check  (public.wv_is_tender_team()
+               and exists (select 1 from public.tenders t where t.id = tender_id));
+
+drop policy if exists tbids_all   on public.tender_bids;
+drop policy if exists tbids_read  on public.tender_bids;
+drop policy if exists tbids_write on public.tender_bids;
+create policy tbids_read on public.tender_bids for select to authenticated
+  using (exists (select 1 from public.tenders t where t.id = tender_id));
+create policy tbids_write on public.tender_bids for all to authenticated
+  using       (public.wv_is_tender_team()
+               and exists (select 1 from public.tenders t where t.id = tender_id))
+  with check  (public.wv_is_tender_team()
+               and exists (select 1 from public.tenders t where t.id = tender_id));
+
+
+-- --- RFP requests ------------------------------------------------------------
+--
+--  New rule: an RFP request is visible ONLY to the VP and the Founder, the
+--  person who raised it, and the person it was handed to. It is no longer
+--  visible to everyone who can see the tender, and the tender team no longer
+--  sees all of them - only the ones assigned to them.
+--
+--  Anyone with access may raise one. Only the VP and Founder decide who works
+--  on it.
+-- ---------------------------------------------------------------------------
+drop policy if exists trfp_read   on public.tender_rfp_requests;
+drop policy if exists trfp_insert on public.tender_rfp_requests;
+drop policy if exists trfp_update on public.tender_rfp_requests;
+
+create policy trfp_read on public.tender_rfp_requests for select to authenticated
+  using ( public.wv_can_assign_rfp()
+          or requested_by = auth.uid()::text
+          or assigned_to  = auth.uid()::text );
+
+create policy trfp_insert on public.tender_rfp_requests for insert to authenticated
+  with check (public.wv_has_tender_access());
+
+create policy trfp_update on public.tender_rfp_requests for update to authenticated
+  using ( public.wv_can_assign_rfp()
+          or requested_by = auth.uid()::text
+          or assigned_to  = auth.uid()::text );
+
+-- Only the VP and Founder hand a request to someone. Without this, the
+-- requester could assign it to themselves and the update policy above would
+-- allow it, because they pass the requested_by test.
+create or replace function public.wv_rfp_guard_assign()
+returns trigger language plpgsql security definer set search_path = public as $fn$
+begin
+  if tg_op = 'INSERT' then
+    if new.assigned_to is not null and not public.wv_can_assign_rfp() then
+      new.assigned_to := null;    -- raise it unassigned; the VP will hand it out
+    end if;
+    return new;
+  end if;
+
+  if new.assigned_to is distinct from old.assigned_to
+     and not public.wv_can_assign_rfp() then
+    new.assigned_to := old.assigned_to;
+  end if;
+  return new;
+end
+$fn$;
+
+drop trigger if exists trfp_guard_assign on public.tender_rfp_requests;
+create trigger trfp_guard_assign
+  before insert or update on public.tender_rfp_requests
+  for each row execute function public.wv_rfp_guard_assign();
+
 -- ===========================================================================
---  SECTION 10 - VERIFICATION
+--  SECTION 11 - VERIFICATION
 --  Expect:  15  -  3  -  7  -  23  -  15  -  true
 --  tables, regions, org units, standard documents, RLS-protected tables,
 --  and "the system is brand new, go and create the first administrator".

@@ -498,6 +498,7 @@
     </div>
     <div class="modal-f">
       <button class="btn" data-close>Close</button>
+      <button class="btn" id="dDecide" style="display:none">Go / No-Go decision</button>
       <button class="btn primary" id="dEdit">Edit tender</button>
     </div>
   </div>
@@ -519,7 +520,8 @@
         <div class="field"><label for="reType">Document type</label><select id="reType"></select></div>
         <div class="field"><label for="rePri">Priority</label><select id="rePri"></select></div>
         <div class="field"><label for="reNeed">Needed by</label><input id="reNeed" type="date"></div>
-        <div class="field"><label for="reAssign">Assign to</label><select id="reAssign"></select></div>
+        <div class="field" id="reAssignWrap"><label for="reAssign">Assign to</label><select id="reAssign"></select>
+          <div class="hint">Only the VP and the Founder hand a request to someone</div></div>
       </div>
       <div class="field"><label for="reDesc">Details</label><textarea id="reDesc" rows="3"
         placeholder="What exactly is required, any format the authority insists on, anything already tried"></textarea></div>
@@ -605,6 +607,34 @@
       <button class="btn danger" id="eeDelete" style="display:none;margin-right:auto">Delete</button>
       <button class="btn" data-close>Cancel</button>
       <button class="btn primary" id="eeSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- The one thing leadership changes on a tender. Stacks on the tender file. -->
+<div class="overlay" id="decideOverlay">
+  <div class="modal">
+    <div class="modal-h">
+      <div><h3>Go / No-Go decision</h3><p id="gdSub"></p></div>
+      <button class="x" data-close>✕</button>
+    </div>
+    <div class="modal-b">
+      <div class="banner" id="gdBanner" style="display:none"></div>
+      <p class="hint" style="margin:-2px 0 12px">
+        This is the decision on whether we bid. Everything else on the tender —
+        stage, dates, documents, money — is maintained by the tender executives.
+      </p>
+      <div class="form-grid">
+        <div class="field"><label for="gdGo">Decision</label><select id="gdGo"></select></div>
+        <div class="field full"><label for="gdWhy">Reason</label>
+          <input id="gdWhy" type="text" placeholder="Why we are bidding, or why not">
+          <div class="hint">Worth writing down — a no-go with no reason gets asked about again next year</div></div>
+      </div>
+      <div id="gdPrev" class="hint"></div>
+    </div>
+    <div class="modal-f">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn primary" id="gdSave">Save decision</button>
     </div>
   </div>
 </div>

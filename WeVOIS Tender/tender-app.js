@@ -16,6 +16,7 @@
     editId: null,
     editEmdId: null,
     corrTenderId: null,
+    decideId: null,
     editFirmId: null,
     bidTenderId: null,
     editBidId: null,
@@ -61,7 +62,7 @@
      back to the dashboard instead of back to the tender they were working on.
      So when one of these is stacked we close only the top one, and swallow the
      event before the global handler sees it. */
-  var STACKABLE = ['emdOverlay', 'rfpOverlay', 'corrOverlay', 'bidOverlay'];
+  var STACKABLE = ['emdOverlay', 'rfpOverlay', 'corrOverlay', 'bidOverlay', 'decideOverlay'];
 
   function detailOpen() {
     var el = $('detailOverlay');
@@ -645,7 +646,9 @@
     $('dTitle').textContent = t.title;
     $('dSub').textContent = [t.nit_no, t.authority, t.city, WVT.regionName(t.region_id)]
       .filter(Boolean).join(' · ');
-    show('dEdit', WVT.canEdit(t));
+    show('dEdit', WVT.canEditTender(t));
+    /* Leadership do not edit the file, but they do decide whether we bid. */
+    show('dDecide', WVT.canDecide(t) && !WVT.canEditTender(t));
     renderDetail();
     WV.openOverlay('detailOverlay');
   }
@@ -727,7 +730,8 @@
   function renderDetailCheck(t) {
     var items = WVT.checklistFor(t.id);
     var p = WVT.checklistProgress(t.id);
-    var editable = WVT.canEdit(t);
+    /* The tender file belongs to the executives. Leadership reads it. */
+    var editable = WVT.canEditTender(t);
 
     var head = '<div class="card-head" style="margin-bottom:12px">' +
       '<div><b>' + p.done + ' of ' + p.total + ' required documents ready</b>' +
@@ -870,6 +874,10 @@
       tenderId || '', 'Not linked to a tender');
     $('reType').innerHTML = opts(WVT.RFP_TYPES, 'RFP');
     $('rePri').innerHTML  = opts(WVT.PRIORITIES, 'Normal');
+    /* Handing a request to a person is the VP's and the Founder's call. The
+       database strips assigned_to from anyone else (trfp_guard_assign), so
+       offering the picker would be a lie. */
+    show('reAssignWrap', WVT.canAssignRfp());
     $('reAssign').innerHTML = opts(
       WVT.profiles.filter(function (p) { return p.tender_role === 'tender_team' || p.role === 'admin'; })
         .map(function (p) { return { value: p.id, label: p.full_name || p.email }; }),
@@ -891,9 +899,12 @@
       needed_by: dateOrNull('reNeed'),
       requested_by: String(WV.currentUser.id),
       requested_by_team: (WVT.me && WVT.me.tender_team_id) || null,
-      assigned_to: val('reAssign') || null,
       status: 'Requested'
     };
+    /* Set the key at all only when we are allowed to. JSON.stringify would drop
+       an undefined, but leaving it out entirely is what the next reader needs
+       to see. */
+    if (WVT.canAssignRfp()) body.assigned_to = val('reAssign') || null;
     $('reSave').disabled = true;
     var r = await WVT.saveRfp(body, null);
     $('reSave').disabled = false;
@@ -988,7 +999,9 @@
       if (why == null) return;
       body.reject_reason = String(why).trim() || null;
     }
-    if (toStatus === 'Accepted' && WVT.isPreparer()) body.assigned_to = String(WV.currentUser.id);
+    /* Accepting no longer self-assigns: the VP and Founder decide who works on
+       it, and the database would strip a self-assignment anyway. */
+    if (toStatus === 'Accepted' && WVT.canAssignRfp()) body.assigned_to = String(WV.currentUser.id);
     if (toStatus === 'Delivered' || toStatus === 'Revised') {
       var cur = 0;
       WVT.data.rfps.forEach(function (r) { if (String(r.id) === String(id)) cur = Number(r.current_version || 0); });
@@ -1158,6 +1171,56 @@
   }
 
   /* ========================================================================
+     GO / NO-GO — the one thing leadership changes
+     ======================================================================== */
+
+  function openDecideEditor(tenderId) {
+    var t = WVT.tenderById(tenderId);
+    if (!t) return;
+    if (!WVT.canDecide(t)) return WV.toast('You cannot make this decision.');
+    state.decideId = tenderId;
+
+    $('gdSub').textContent = t.title;
+    $('gdGo').innerHTML = opts(WVT.GO_OPTIONS, t.go_no_go || 'Undecided');
+    setVal('gdWhy', t.go_no_go_reason);
+    $('gdPrev').textContent = t.go_no_go_at
+      ? 'Last decided ' + whenText(t.go_no_go_at) + ' by ' + WVT.personName(t.go_no_go_by)
+      : '';
+    banner('gdBanner', '');
+    WV.openOverlay('decideOverlay');
+  }
+
+  async function saveDecision() {
+    var t = WVT.tenderById(state.decideId);
+    if (!t) return;
+    var go = val('gdGo');
+
+    /* Only these four columns are sent. The database would put anything else
+       back anyway (tenders_zz_guard_update), but sending a whole tender body
+       here would make the next reader think leadership can edit it. */
+    var body = {
+      go_no_go: go === 'Undecided' ? null : go,
+      go_no_go_reason: val('gdWhy') || null
+    };
+    if (body.go_no_go && body.go_no_go !== t.go_no_go) {
+      body.go_no_go_by = String(WV.currentUser.id);
+      body.go_no_go_at = new Date().toISOString();
+    }
+
+    var btn = $('gdSave');
+    btn.disabled = true;
+    var r = await WVT.saveTender(body, state.decideId);
+    btn.disabled = false;
+    if (!r.ok) return banner('gdBanner', 'Could not save: ' + r.error, 'bad');
+
+    await WV.logActivity('Go / No-Go recorded', (body.go_no_go || 'Undecided') + ' — ' + t.title, t.id);
+    closeTop('decideOverlay');
+    WV.toast('Decision saved');
+    await refresh();
+    if (state.detailId) renderDetail();
+  }
+
+  /* ========================================================================
      FIRMS AND BIDS
      ======================================================================== */
 
@@ -1240,7 +1303,7 @@
 
   function renderDetailBids(t) {
     var rows = WVT.bidsFor(t.id);
-    var editable = WVT.canEdit(t);
+    var editable = WVT.canEditTender(t);
     var anyFirms = WVT.data.firms.length > 0;
 
     var head = '<div class="card-head" style="margin-bottom:12px">' +
@@ -1294,7 +1357,9 @@
   function openBidEditor(tenderId, bidId) {
     var t = WVT.tenderById(tenderId);
     if (!t) return;
-    if (!WVT.canEdit(t)) return WV.toast('You cannot edit this tender.');
+    if (!WVT.canEditTender(t)) {
+      return WV.toast('Only tender executives update a tender. You can record the Go / No-Go decision.');
+    }
 
     state.bidTenderId = tenderId;
     state.editBidId = bidId || null;
@@ -1395,7 +1460,7 @@
 
   function renderDetailCorr(t) {
     var rows = WVT.corrigendaFor(t.id);
-    var editable = WVT.canEdit(t);
+    var editable = WVT.canEditTender(t);
 
     var head = '<div class="card-head" style="margin-bottom:12px">' +
       '<div><b>' + rows.length + ' corrigend' + (rows.length === 1 ? 'um' : 'a') + '</b>' +
@@ -2263,6 +2328,9 @@
       setVal('rgName', ''); banner('rgBanner', ''); WV.openOverlay('regionOverlay');
     });
     on('rgSave', 'click', saveRegion);
+
+    on('dDecide', 'click', function () { if (state.detailId) openDecideEditor(state.detailId); });
+    on('gdSave', 'click', saveDecision);
 
     /* --- firms and bids --- */
     on('newFirmBtn', 'click', function () { openFirmEditor(null); });

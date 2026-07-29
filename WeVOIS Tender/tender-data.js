@@ -209,9 +209,40 @@
     return teamOk && regionOk;
   };
 
-  /* Everyone who can see a tender can also comment on it and move it along -
-     leadership included. Only deleting is restricted. */
+  /* Seeing a tender is no longer the same as being able to change it.
+   *
+   *   canEdit      - can you see it at all (comments, and the read gates)
+   *   canEditTender- may you change the file. Tender executives only.
+   *   canDecide    - may you record the Go / No-Go. Leadership and executives.
+   *
+   * Leadership - VP, AVP, DGM, Founder - decide whether we bid and then watch.
+   * The people doing the work own the file. Enforced by wv_is_tender_team()
+   * and the tenders_zz_guard_update trigger in the database; these three only
+   * decide which controls to show. */
   WVT.canEdit   = function (t) { return t ? WVT.canSee(t.team_id, t.region_id) : false; };
+
+  WVT.canEditTender = function (t) {
+    return !!t && WVT.isTenderTeam() && WVT.canSee(t.team_id, t.region_id);
+  };
+
+  WVT.isLeadership = function () {
+    var me = WVT.me;
+    return !!(me && me.tender_access &&
+      ['vp', 'avp', 'dgm', 'founder'].indexOf(me.tender_role) >= 0);
+  };
+
+  WVT.canDecide = function (t) {
+    if (!t || !WVT.canSee(t.team_id, t.region_id)) return false;
+    return WVT.isTenderTeam() || WVT.isLeadership();
+  };
+
+  /* Who hands an RFP request to a person. The business put this with the VP
+     and the Founder specifically, not with all of leadership. */
+  WVT.canAssignRfp = function () {
+    if (WVT.isAdmin()) return true;
+    var me = WVT.me;
+    return !!(me && me.tender_access && ['vp', 'founder'].indexOf(me.tender_role) >= 0);
+  };
   WVT.canDelete = function ()  { return WVT.isAdmin() || WVT.isGlobal(); };
   WVT.canUpload = function () {
     if (WVT.isGlobal()) return true;
