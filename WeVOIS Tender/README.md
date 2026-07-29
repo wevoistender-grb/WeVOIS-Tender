@@ -93,39 +93,62 @@ estimated cost, EMD, fees, all five key dates and the contract period fill
 themselves in. It never overwrites anything you have already typed, and tells
 you exactly which fields it filled.
 
+## The flow
+
+1. **BD or the tender team** spots a tender and adds it.
+2. **A tender executive reads it** and records an **eligibility verdict** —
+   are we eligible to bid, or not. *Not eligible* demands a reason, because
+   that reason is what tells you which credential to go and build.
+3. Marking it **Eligible** hands it to the **VP and the Founder**: it appears
+   in a *Waiting for your decision* list on their dashboard, with how long it
+   has been sitting there, and raises a notification.
+4. **VP or Founder** records **Go** or **No-Go**. They are the approving
+   authority — for tenders and for RFP assignments both.
+5. **Only after a Go** does work start. Until then nothing can be marked
+   submitted and no EMD can be recorded.
+
+That last one is a hard gate, not a warning. Money and effort do not go into a
+bid nobody approved.
+
 ## Who may change what
 
 Seeing a tender is not the same as being able to change it.
 
-| | Tender executives | VP · AVP · DGM · Founder | BD |
-|---|---|---|---|
-| See the tender and everything on it | yes | yes | yes |
-| Create a new tender | yes | — | **yes** |
-| Edit the tender after it exists | **yes** | no | no |
-| Stage, dates, scope, money | **yes** | no | no |
-| Checklist, corrigenda, firms & bids | **yes** | no | no |
-| EMD and fees | **yes** | no | no |
-| **Go / No-Go decision** | yes | **yes** | no |
-| Comment | yes | yes | yes |
+| | Tender executives | VP · Founder | AVP · DGM | BD |
+|---|---|---|---|---|
+| See the tender and everything on it | yes | yes | yes | yes |
+| Create a new tender | yes | — | — | **yes** |
+| Edit it after it exists | **yes** | no | no | no |
+| Stage, dates, scope, money | **yes** | no | no | no |
+| Checklist, corrigenda, firms & bids | **yes** | no | no | no |
+| EMD and fees *(after a Go)* | **yes** | no | no | no |
+| **Eligibility verdict** | **yes** | no | no | no |
+| **Go / No-Go decision** | no | **yes** | no | no |
+| Assign an RFP request | no | **yes** | no | no |
+| Comment | yes | yes | yes | yes |
 
 **Tender executives** are the Tender Team role. They do the work, so they own
-the file.
+the file — but they raise the Go/No-Go request rather than answering it. Nobody
+approves their own tender.
 
-**Leadership decides and then watches.** VP, AVP, DGM and the Founder get one
-control on a tender — the **Go / No-Go decision** — and read-only access to
-everything else. They see every amount, every date and every document; they
-just do not change them.
+**VP and Founder are the approving authority.** One control on a tender, the
+Go/No-Go, plus RFP assignment. Everything else is read-only to them.
+
+**AVP and DGM see everything and decide nothing.**
 
 **BD spots tenders and creates them**, then hands over. Note the consequence:
-once a BD person saves a tender they cannot correct a typo in it — they have to
-ask an executive. Say the word if you want that softened.
+once a BD person saves a tender they cannot correct a typo — they have to ask an
+executive. Say the word if you want that softened.
+
+The administrator can do anything, as a safety valve.
 
 This is enforced in PostgreSQL, not in the browser. Because a policy can only
-say yes or no to a whole row, the tender table carries a trigger that rebuilds
-the row from what it was and copies across only the Go / No-Go columns. Anything
-else a non-executive sends is put back. Written that way round on purpose: a
-column added to the table in future is protected automatically rather than
-being forgotten.
+say yes or no to a whole row, the tender table carries a trigger that decides
+three ways: the approving authority gets the Go/No-Go columns and nothing else,
+executives get everything *except* those columns, and everyone else gets
+nothing. It is written as "keep the old row, allow these" rather than "block
+these", so a column added to the table in future is protected automatically
+instead of being forgotten.
 
 ### RFP requests are private
 
@@ -134,9 +157,22 @@ it, and the person it was given to. Not to everyone who can see the tender, and
 not to the whole tender team — an executive sees only the requests assigned to
 them.
 
-Anyone with access can raise one. **Only the VP and the Founder decide who works
-on it.** Trying to assign one to yourself is stripped by the database, not just
-hidden in the interface.
+Anyone with access can raise one. It is raised **unassigned** — trying to assign
+one to yourself is stripped by the database, not just hidden in the interface.
+**Only the VP and the Founder decide who works on it.**
+
+**The copy itself follows the same rule.** The person preparing it attaches the
+document when it is ready — uploaded, or as a link. Every version is kept on the
+timeline rather than overwritten, so what changed between v1 and v2 survives.
+
+An **uploaded** copy is stored under `rfp/<request-id>/…` and reading it requires
+being able to read that request: Founder, VP, requester, preparer, nobody else.
+Reassign the request and file access moves with it — the previous preparer loses
+it immediately.
+
+A **linked** copy cannot be protected that way, because whoever holds the link
+can open it whatever their role. The interface says so at the point of
+attaching. Use upload for anything confidential.
 
 ## Who sees what
 

@@ -70,6 +70,11 @@
      for a reason not on this list you want it written in the notes, not forced
      into the nearest wrong box where it quietly skews the reporting. */
   WVT.LOSS_REASONS = ['Technical', 'Financial', 'Wrong documents uploaded', 'Other'];
+
+  /* The tender team's verdict after reading the notice. 'Not checked' exists so
+     you can tell a tender nobody has looked at from one that was looked at and
+     passed - without it, an untouched backlog looks like a clean bill. */
+  WVT.ELIGIBILITY = ['Not checked', 'Eligible', 'Not eligible'];
   WVT.GO_OPTIONS    = ['Undecided', 'Go', 'No-Go'];
   WVT.TENDER_TYPES  = ['Service', 'Works', 'Supply', 'PPP', 'Other'];
 
@@ -231,10 +236,27 @@
       ['vp', 'avp', 'dgm', 'founder'].indexOf(me.tender_role) >= 0);
   };
 
+  /* Who answers a Go / No-Go request. The VP and the Founder, and nobody else:
+     AVP and DGM watch, and the tender executives raise the request rather than
+     answering it. Mirrors wv_can_approve_tender() in the database. */
   WVT.canDecide = function (t) {
-    if (!t || !WVT.canSee(t.team_id, t.region_id)) return false;
-    return WVT.isTenderTeam() || WVT.isLeadership();
+    return !!t && WVT.canApprove() && WVT.canSee(t.team_id, t.region_id);
   };
+
+  WVT.canApprove = function () { return WVT.canAssignRfp(); };
+
+  /* A tender the executives have passed as eligible, still waiting on a
+     decision. This is the VP's and Founder's work list. */
+  WVT.awaitingDecision = function (list) {
+    return (list || WVT.data.tenders).filter(function (t) {
+      return t.eligibility_status === 'Eligible' && !t.go_no_go;
+    }).sort(function (a, b) {
+      return String(a.submission_date || '9999').localeCompare(String(b.submission_date || '9999'));
+    });
+  };
+
+  /* The gate. Nothing is filed and no money moves until the answer is Go. */
+  WVT.isApproved = function (t) { return !!t && t.go_no_go === 'Go'; };
 
   /* Who hands an RFP request to a person. The business put this with the VP
      and the Founder specifically, not with all of leadership. */
@@ -805,6 +827,54 @@
       actor_email: WV.currentUser.email
     }).select().maybeSingle();
     return r.error ? { ok: false, error: r.error.message } : { ok: true, row: r.data };
+  };
+
+  /* Attach the prepared document to a request.
+   *
+   * An UPLOADED copy lands under rfp/<request_id>/... and is covered by the
+   * storage rule: only the Founder, the VP, the person who raised it and the
+   * person preparing it can read it. A LINKED copy is not - whoever has the
+   * link can open it, whatever their role. The interface says so; this just
+   * keeps the two in different columns so they are never confused.
+   *
+   * Every version is kept on the timeline. The request carries the latest. */
+  WVT.attachRfpCopy = async function (requestId, file, url) {
+    var body = {}, note = '', path = null;
+
+    if (file) {
+      var up = await WVT.uploadFile('rfp/' + String(requestId), file);
+      if (!up.ok) return { ok: false, error: up.error };
+      path = up.path;
+      body.file_path = path;
+      note = 'Copy attached: ' + file.name;
+    } else if (url) {
+      body.file_url = url;
+      note = 'Copy linked';
+    } else {
+      return { ok: false, error: 'Choose a file or paste a link first.' };
+    }
+
+    var cur = 0;
+    WVT.data.rfps.forEach(function (x) { if (String(x.id) === String(requestId)) cur = Number(x.current_version || 0); });
+    body.current_version = cur + 1;
+
+    var u = await WV.sb.from('tender_rfp_requests').update(body)
+      .eq('id', String(requestId)).select().maybeSingle();
+    if (u.error) return { ok: false, error: u.error.message };
+
+    await WV.sb.from('tender_rfp_events').insert({
+      request_id: String(requestId),
+      event: 'file',
+      note: note,
+      file_path: path,
+      file_url: url || null,
+      version: body.current_version,
+      actor_id: String(WV.currentUser.id),
+      actor_name: WV.currentUser.full_name || WV.currentUser.email,
+      actor_email: WV.currentUser.email
+    });
+
+    return { ok: true, row: u.data, version: body.current_version };
   };
 
   /* ==========================================================================

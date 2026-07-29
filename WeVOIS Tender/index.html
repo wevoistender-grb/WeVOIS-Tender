@@ -200,6 +200,14 @@
       <div id="upcomingRows"></div>
     </div>
 
+    <div class="card" id="decisionQueueCard" style="display:none">
+      <div class="card-head">
+        <div><h2>Waiting for your decision</h2>
+          <p class="cap">Marked eligible by the tender team. Nothing is filed and no money moves until you answer</p></div>
+      </div>
+      <div id="decisionQueue"></div>
+    </div>
+
     <div class="grid g-2">
       <div class="card">
         <h2>Pipeline</h2>
@@ -404,6 +412,21 @@
         <div class="field"><label for="teMonths">Contract period (months)</label><input id="teMonths" type="number" min="0" step="1"></div>
       </div>
 
+      <div class="sec-title">Eligibility</div>
+      <p class="hint" style="margin:-4px 0 10px">
+        The tender team's verdict after reading the notice. Marking it
+        <b>Eligible</b> sends it to the VP and the Founder for a Go / No-Go.
+      </p>
+      <div class="form-grid">
+        <div class="field"><label for="teElig2">Are we eligible?</label><select id="teElig2"></select></div>
+        <div class="field full" id="teEligWhyWrap" style="display:none">
+          <label for="teEligWhy">Why not? *</label>
+          <input id="teEligWhy" type="text" placeholder="Turnover requirement is 50cr, we are at 30cr">
+          <div class="hint">This is the field that tells you which credential to go and build</div>
+        </div>
+        <div class="field full" id="teEligStamp" style="display:none"><div class="hint"></div></div>
+      </div>
+
       <div class="sec-title">Status</div>
       <div class="form-grid">
         <div class="field"><label for="teStage">Stage</label><select id="teStage"></select>
@@ -422,7 +445,7 @@
         <div class="field full">
           <label class="checks" style="display:flex"><input type="checkbox" id="teSubmitted">
             <span>The bid has been filed with the authority</span></label>
-          <div class="hint">Ticking this is what opens the EMD, rank and result fields, and stops the deadline countdown.</div>
+          <div class="hint" id="teSubHint">Ticking this is what opens the EMD, rank and result fields, and stops the deadline countdown.</div>
         </div>
         <div class="field" id="teSubOnWrap" style="display:none">
           <label for="teSubmittedOn">Filed on</label><input id="teSubmittedOn" type="date">

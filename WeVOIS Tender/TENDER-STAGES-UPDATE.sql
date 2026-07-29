@@ -3,7 +3,7 @@
 --
 --  Run this on a database that already has TENDER-SETUP.sql in it.
 --  It is idempotent: run it as many times as you like. If you already ran an
---  earlier copy of this file, run it again - sections 7, 9 and 10 are new.
+--  earlier copy of this file, run it again - sections 7, 9, 10, 11 and 12 are new.
 --
 --  Paste the WHOLE file into the Supabase SQL editor and select all of it
 --  (Ctrl+A) before pressing Run. The editor executes only the selection, and
@@ -25,10 +25,16 @@
 --    7. Firms and per-firm bids: tender_firms (the companies WeVois bids
 --       through), tender_bids (one row per firm per tender), and firm_id on
 --       every EMD payment so refunds can be tracked per firm.
---    8. Who may change what. Tender executives edit the tender; VP, AVP, DGM
---       and Founder change only the Go / No-Go decision; BD creates a tender
+--    8. Who may change what. Tender executives edit the tender; BD creates one
 --       and hands it over. RFP requests become private to the VP, the Founder,
 --       the person who raised it and the person it was given to.
+--   10. The RFP copy: somewhere to attach the delivered document, and a
+--       storage rule so an uploaded copy is readable only by the four people
+--       who can see the request.
+--    9. Eligibility, the Go / No-Go request and the gate. The tender team
+--       records an eligibility verdict; eligible tenders go to the VP and
+--       Founder for a decision; nothing is submitted and no EMD is recorded
+--       until that decision is Go.
 --
 --  Nothing is dropped and no data is deleted.
 -- ===========================================================================
@@ -553,9 +559,258 @@ create trigger trfp_guard_assign
   before insert or update on public.tender_rfp_requests
   for each row execute function public.wv_rfp_guard_assign();
 
+-- ---------------------------------------------------------------------------
+--  11. ELIGIBILITY, THE GO / NO-GO REQUEST, AND THE GATE
+--
+--  The flow the business runs:
+--
+--    1. BD or the tender team adds or updates a tender.
+--    2. The tender team reads it and records an ELIGIBILITY verdict -
+--       are we eligible to bid, or not.
+--    3. If eligible, it goes to the VP and the Founder as a request for a
+--       Go / No-Go decision.
+--    4. VP or Founder records Go or No-Go. They are the approving authority.
+--    5. Only after a Go does work start: nothing may be marked submitted and
+--       no EMD may be recorded until then.
+--
+--  Two consequences for who may change what, tightening section 10:
+--
+--    * The Go / No-Go is now the VP's and the Founder's alone. AVP and DGM see
+--      everything and decide nothing. Tender executives cannot set it either -
+--      they raise the request, they do not answer it.
+--    * Eligibility is the tender team's call, not leadership's.
+--
+--  So the tender guard becomes three-way rather than two-way.
+-- ---------------------------------------------------------------------------
+
+alter table public.tenders add column if not exists eligibility_status text not null default 'Not checked';
+alter table public.tenders add column if not exists eligibility_reason text;
+alter table public.tenders add column if not exists eligibility_by     text;
+alter table public.tenders add column if not exists eligibility_at     timestamptz;
+alter table public.tenders add column if not exists decision_requested_at timestamptz;
+
+comment on column public.tenders.eligibility_status is
+  'Not checked | Eligible | Not eligible. Set by the tender team after reading the notice.';
+comment on column public.tenders.eligibility_reason is
+  'Why we are not eligible - turnover, experience, registration. Required when Not eligible; this is the data that says which credential to go and build.';
+comment on column public.tenders.decision_requested_at is
+  'When it was handed to the VP and Founder for a decision. Stamped automatically the moment eligibility becomes Eligible, so turnaround is a plain subtraction.';
+
+-- Anything already carrying free-text eligibility notes has clearly been read.
+-- Left as 'Not checked' regardless: guessing a verdict from a note would put
+-- words in somebody's mouth, and the whole point of the field is that a person
+-- decided it.
+
+
+-- The approving authority. Same people who assign RFP requests, which is what
+-- the business asked for - one approving authority for both.
+create or replace function public.wv_can_approve_tender()
+returns boolean language sql security definer stable set search_path = public as $$
+  select public.wv_can_assign_rfp();
+$$;
+
+
+-- --- the three-way guard -----------------------------------------------------
+create or replace function public.wv_tenders_guard_update()
+returns trigger language plpgsql security definer set search_path = public as $fn$
+declare
+  kept public.tenders%rowtype;
+  is_admin_user boolean;
+begin
+  select exists (select 1 from public.user_profiles p
+                  where p.id = auth.uid()::text and p.role = 'admin'
+                    and coalesce(p.status,'active') <> 'inactive')
+    into is_admin_user;
+
+  -- The administrator is the safety valve and may change anything.
+  if is_admin_user then
+    return new;
+  end if;
+
+  -- The approving authority answers the request and nothing else.
+  if public.wv_can_approve_tender() then
+    kept := old;
+    kept.go_no_go        := new.go_no_go;
+    kept.go_no_go_reason := new.go_no_go_reason;
+    kept.go_no_go_by     := new.go_no_go_by;
+    kept.go_no_go_at     := new.go_no_go_at;
+    kept.updated_at      := now();
+    return kept;
+  end if;
+
+  -- Tender executives own the file, but they raise the request rather than
+  -- answering it, so the decision columns are put back.
+  if public.wv_is_tender_team() then
+    new.go_no_go        := old.go_no_go;
+    new.go_no_go_reason := old.go_no_go_reason;
+    new.go_no_go_by     := old.go_no_go_by;
+    new.go_no_go_at     := old.go_no_go_at;
+
+    -- The gate: nothing is filed until the decision is Go.
+    if new.submitted_at is not null and old.submitted_at is null
+       and coalesce(new.go_no_go, '') <> 'Go' then
+      raise exception 'This tender has no Go decision yet. The VP or Founder must approve it before it can be marked submitted.'
+        using errcode = 'check_violation';
+    end if;
+
+    -- Stamp the moment it becomes a pending decision, so the wait is measurable.
+    if new.eligibility_status = 'Eligible'
+       and old.eligibility_status is distinct from 'Eligible' then
+      new.decision_requested_at := now();
+    end if;
+    if new.eligibility_status is distinct from old.eligibility_status then
+      new.eligibility_by := auth.uid()::text;
+      new.eligibility_at := now();
+    end if;
+    -- A reason for being ineligible, on something that is eligible, is noise.
+    if new.eligibility_status <> 'Not eligible' then
+      new.eligibility_reason := null;
+    end if;
+
+    return new;
+  end if;
+
+  -- Everyone else changes nothing at all.
+  kept := old;
+  kept.updated_at := now();
+  return kept;
+end
+$fn$;
+
+drop trigger if exists tenders_zz_guard_update on public.tenders;
+create trigger tenders_zz_guard_update
+  before update on public.tenders
+  for each row execute function public.wv_tenders_guard_update();
+
+
+-- --- the gate on money -------------------------------------------------------
+-- No EMD, bank guarantee or fee is recorded against a tender nobody approved.
+-- Reading is untouched.
+drop policy if exists temd_insert on public.tender_emd;
+drop policy if exists temd_update on public.tender_emd;
+
+create policy temd_insert on public.tender_emd for insert to authenticated
+  with check (public.wv_can_edit_emd()
+              and exists (select 1 from public.tenders t
+                           where t.id = tender_id and t.go_no_go = 'Go'));
+
+create policy temd_update on public.tender_emd for update to authenticated
+  using       (public.wv_can_edit_emd()
+               and exists (select 1 from public.tenders t where t.id = tender_id))
+  with check  (public.wv_can_edit_emd()
+               and exists (select 1 from public.tenders t where t.id = tender_id));
+-- update deliberately does NOT require a Go: a tender approved, paid for and
+-- later dropped still needs its refund chasing to completion.
+
+
+-- --- tell the approvers ------------------------------------------------------
+-- A pending decision that nobody notices is the same as no process at all.
+create or replace function public.wv_notify_decision_due()
+returns trigger language plpgsql security definer set search_path = public as $fn$
+begin
+  if new.eligibility_status = 'Eligible'
+     and old.eligibility_status is distinct from 'Eligible'
+     and new.go_no_go is null then
+    insert into public.notifications (title, message, type, recipient_role)
+    values ('Go / No-Go needed: ' || new.title,
+            coalesce(new.authority, 'Tender') ||
+              ' - closes ' || coalesce(to_char(new.submission_date, 'DD Mon YYYY'), 'no date') ||
+              '. Marked eligible and waiting for a decision.',
+            'warn', 'all');
+    -- recipient_role 'all' on purpose: the bell is the nudge, the pending
+    -- queue on the VP's and Founder's dashboard is the actual work list.
+  end if;
+  return new;
+end
+$fn$;
+
+drop trigger if exists tenders_notify_decision on public.tenders;
+create trigger tenders_notify_decision
+  after update on public.tenders
+  for each row execute function public.wv_notify_decision_due();
+
+-- ---------------------------------------------------------------------------
+--  12. THE RFP COPY
+--
+--  An RFP request already carried file_path columns - on the request and on
+--  every timeline event - but nothing ever wrote them. The preparer finished a
+--  document and had nowhere to put it, so it went out by email and the trail
+--  ended there.
+--
+--  Two halves to this:
+--
+--    a) somewhere to put the copy, versioned, on the timeline
+--    b) an access rule that matches the request's own
+--
+--  (b) is the important one. The old storage rule was:
+--
+--      using (bucket_id = 'tenders' and wv_has_tender_access())
+--
+--  - anyone with tender access could read ANY file in the bucket. An RFP copy
+--  stored under that rule would be readable by people who cannot see the
+--  request it belongs to, which is exactly what the confidentiality is for.
+--
+--  So RFP copies go under  rfp/<request_id>/...  and reading one requires being
+--  able to read that request. The subquery runs as the caller, so the request's
+--  own row level security answers the question - Founder, VP, the person who
+--  raised it, the person preparing it. Nobody else, and no second rule to keep
+--  in step with the first.
+-- ---------------------------------------------------------------------------
+
+-- An external link, for copies kept in Drive rather than uploaded. Deliberately
+-- separate from file_path so the two are never confused: an uploaded copy is
+-- covered by the rule below, a linked one is not, and the interface says so.
+alter table public.tender_rfp_requests add column if not exists file_url text;
+alter table public.tender_rfp_events   add column if not exists file_url text;
+
+comment on column public.tender_rfp_requests.file_url is
+  'Link to a copy held elsewhere (Drive). NOT access-controlled - whoever has the link can open it. Prefer file_path for anything confidential.';
+
+
+drop policy if exists tender_files_read   on storage.objects;
+drop policy if exists tender_files_upload on storage.objects;
+drop policy if exists tender_files_update on storage.objects;
+
+-- Reading: ordinary tender and company files as before; an RFP copy only if you
+-- can see its request.
+create policy tender_files_read on storage.objects for select to authenticated
+  using (
+    bucket_id = 'tenders'
+    and public.wv_has_tender_access()
+    and (
+      name not like 'rfp/%'
+      or exists (select 1 from public.tender_rfp_requests r
+                  where r.id = split_part(name, '/', 2))
+    )
+  );
+
+-- Uploading an RFP copy: the same four people. In practice it is the assignee
+-- who does it, but the VP or Founder replacing a copy should not be blocked.
+create policy tender_files_upload on storage.objects for insert to authenticated
+  with check (
+    bucket_id = 'tenders'
+    and public.wv_has_tender_access()
+    and (
+      name not like 'rfp/%'
+      or exists (select 1 from public.tender_rfp_requests r
+                  where r.id = split_part(name, '/', 2))
+    )
+  );
+
+create policy tender_files_update on storage.objects for update to authenticated
+  using (
+    bucket_id = 'tenders'
+    and public.wv_has_tender_access()
+    and (
+      name not like 'rfp/%'
+      or exists (select 1 from public.tender_rfp_requests r
+                  where r.id = split_part(name, '/', 2))
+    )
+  );
+
 -- ===========================================================================
---  11. VERIFICATION
---  Expect:  2 - 1 - true - true - 0 - 4 - true - 2 - 1 - true - true - true
+--  13. VERIFICATION
+--  Expect:  2 - 1 - true - true - 0 - 4 - true - 2 - 1 - true - true - true - 5 - true - 2
 --  new tender columns, the corrigenda table, RLS on it, the result trigger,
 --  "no tender still carries the old 'Lost' result", the four EMD policies,
 --  the EMD permission function, the two new tables, the firm_id on EMD, and
@@ -597,4 +852,16 @@ select
   ) as tender_edit_guard,
   (select count(*) > 0 from pg_trigger
     where tgname = 'trfp_guard_assign' and not tgisinternal
-  ) as rfp_assign_guard;
+  ) as rfp_assign_guard,
+  (select count(*) from information_schema.columns
+    where table_schema='public' and table_name='tenders'
+      and column_name in ('eligibility_status','eligibility_reason','eligibility_by',
+                          'eligibility_at','decision_requested_at')
+  ) as eligibility_columns,
+  (select count(*) > 0 from pg_trigger
+    where tgname = 'tenders_notify_decision' and not tgisinternal
+  ) as decision_notifier,
+  (select count(*) from information_schema.columns
+    where table_schema='public' and column_name='file_url'
+      and table_name in ('tender_rfp_requests','tender_rfp_events')
+  ) as rfp_link_columns;

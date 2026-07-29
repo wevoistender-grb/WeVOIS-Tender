@@ -142,6 +142,7 @@
     ].join('');
 
     renderUpcoming();
+    renderDecisionQueue(all);
 
     /* Where everything is sitting.
      *
@@ -403,6 +404,14 @@
     setVal('teElig', t && t.eligibility_notes);
     setVal('teRemark', t && t.remarks);
 
+    $('teElig2').innerHTML = opts(WVT.ELIGIBILITY, t ? (t.eligibility_status || 'Not checked') : 'Not checked');
+    setVal('teEligWhy', t && t.eligibility_reason);
+    $('teEligStamp').querySelector('.hint').textContent =
+      (t && t.eligibility_at)
+        ? 'Last set ' + whenText(t.eligibility_at) + ' by ' + WVT.personName(t.eligibility_by)
+        : '';
+    show('teEligStamp', !!(t && t.eligibility_at));
+
     /* Submission is a fact somebody ticks, not something inferred from stage. */
     setChk('teSubmitted', !!(t && t.submitted_at));
     setVal('teSubmittedOn', t && t.submitted_at ? String(t.submitted_at).slice(0, 10) : '');
@@ -432,6 +441,17 @@
   /* Shows only the parts of the form that can mean anything right now.
      Called on open and on every change to the stage or the submitted tick. */
   function syncStatusFields() {
+    show('teEligWhyWrap', val('teElig2') === 'Not eligible');
+
+    /* The gate, stated up front rather than as a failure on save. */
+    var t0 = state.editId ? WVT.tenderById(state.editId) : null;
+    var approved = WVT.isApproved(t0);
+    var tick = $('teSubmitted');
+    if (tick) tick.disabled = !approved;
+    $('teSubHint').textContent = approved
+      ? 'Ticking this is what opens the EMD, rank and result fields, and stops the deadline countdown.'
+      : 'Locked until the VP or Founder records a Go. Nothing is filed on a tender nobody approved.';
+
     var stage = val('teStage');
     var filed = $('teSubmitted') && $('teSubmitted').checked;
     var lost  = stage === 'Not Awarded';
@@ -508,6 +528,7 @@
       go_no_go: go === 'Undecided' ? null : go,
       go_no_go_reason: val('teGoWhy') || null,
       eligibility_notes: val('teElig') || null,
+      eligibility_status: val('teElig2') || 'Not checked',
       remarks: val('teRemark') || null,
       quoted_value: numOrNull('teQuoted'),
       our_rank: val('teRank') || null,
@@ -516,6 +537,15 @@
       awarded_value: numOrNull('teAwardedValue'),
       result_notes: val('teResultNotes') || null
     };
+
+    if (body.eligibility_status === 'Not eligible') {
+      if (!val('teEligWhy')) {
+        return banner('teBanner', 'Say why we are not eligible — that is the field that tells you which credential to go and build.', 'bad');
+      }
+      body.eligibility_reason = val('teEligWhy');
+    } else {
+      body.eligibility_reason = null;
+    }
 
     /* A loss with no reason is the whole point of this field, so insist. */
     if (body.stage === 'Not Awarded') {
@@ -538,6 +568,10 @@
        being live, countdown and all. */
     var filed = $('teSubmitted').checked;
     var existing = state.editId ? WVT.tenderById(state.editId) : null;
+    if (filed && !(existing && existing.go_no_go === 'Go')) {
+      return banner('teBanner',
+        'This tender has no Go decision yet. The VP or Founder has to approve it before it can be marked submitted.', 'bad');
+    }
     if (filed) {
       var on = dateOrNull('teSubmittedOn');
       var had = existing && existing.submitted_at;
@@ -674,8 +708,14 @@
 
   function renderDetailInfo(t) {
     var d = WVT.deadlineState(t);
+    var elig = t.eligibility_status || 'Not checked';
+    var eligCls = elig === 'Eligible' ? 'b-paid' : elig === 'Not eligible' ? 'b-hold' : 'b-none';
     var rows = [
       ['Stage', WVT.stageBadge(t.stage) + ' ' + WVT.deadlineChip(t)],
+      ['Eligibility', '<span class="badge ' + eligCls + '">' + esc(elig) + '</span>' +
+        (t.eligibility_reason ? ' <span class="muted">— ' + esc(t.eligibility_reason) + '</span>' : '') +
+        (elig === 'Eligible' && !t.go_no_go
+          ? ' <span class="age warn">awaiting decision</span>' : '')],
       ['Go / No-Go', esc(t.go_no_go || 'Undecided') +
         (t.go_no_go_reason ? ' <span class="muted">— ' + esc(t.go_no_go_reason) + '</span>' : '')],
       ['Result', WVT.resultBadge(t.result) + (t.our_rank ? ' <span class="muted">' + esc(t.our_rank) + '</span>' : '')],
@@ -938,7 +978,10 @@
     var events = await WVT.loadEvents(id);
     var me = String(WV.currentUser.id);
     var isRequester = String(r.requested_by) === me;
-    var canWork = WVT.isPreparer() || String(r.assigned_to) === me;
+    /* The person it was given to, or the people who give it out. Being in the
+       tender team is no longer enough - an executive only ever sees the
+       requests assigned to them. */
+    var canWork = String(r.assigned_to) === me || WVT.canAssignRfp();
 
     /* Which buttons make sense at this point in the request's life. */
     var actions = [];
@@ -964,14 +1007,40 @@
     if (r.description) kv.push(['Details', esc(r.description)]);
     if (r.reject_reason) kv.push(['Rejected because', esc(r.reject_reason)]);
 
+    var copyNow = r.file_path
+      ? '<button class="btn sm" data-openfile="' + esc(r.file_path) + '">Open v' + (r.current_version || 1) + '</button>' +
+        ' <span class="muted">uploaded — only the four of you can open it</span>'
+      : (r.file_url
+          ? '<a href="' + esc(r.file_url) + '" target="_blank" rel="noopener">Open the link</a>' +
+            ' <span class="age warn">linked — anyone with the link can open it</span>'
+          : '<span class="muted">Nothing attached yet</span>');
+    kv.push(['The copy', copyNow]);
+
+    var attach = canWork
+      ? '<div class="sec-title">Attach the copy</div>' +
+        '<p class="hint" style="margin:-4px 0 10px">Uploading keeps it private to the Founder, the VP, ' +
+        'whoever raised this and you. A link does not — whoever holds it can open the file.</p>' +
+        '<div class="form-grid">' +
+          '<div class="field"><label for="rdFile">Upload a file</label>' +
+            '<input id="rdFile" type="file"></div>' +
+          '<div class="field"><label for="rdLink">…or paste a link</label>' +
+            '<input id="rdLink" type="url" placeholder="https://drive.google.com/…"></div>' +
+        '</div>' +
+        '<button class="btn sm primary" id="rdAttach">Attach as v' + ((Number(r.current_version) || 0) + 1) + '</button>' +
+        '<div class="banner" id="rdAttachBanner" style="display:none"></div>'
+      : '';
+
     var timeline = events.length ? events.map(function (e) {
       var bad = e.to_status === 'Rejected' || e.to_status === 'Changes Requested';
       var title = e.event === 'status'
         ? (e.from_status ? e.from_status + ' → ' + e.to_status : e.to_status)
         : (e.event === 'file' ? 'File' : e.event === 'assign' ? 'Assignment' : 'Note');
+      var attachedHere = e.file_path
+        ? ' <button class="btn sm" data-openfile="' + esc(e.file_path) + '">Open v' + (e.version || '') + '</button>'
+        : (e.file_url ? ' <a href="' + esc(e.file_url) + '" target="_blank" rel="noopener">Open the link</a>' : '');
       return '<li class="' + (bad ? 'bad' : 'on') + '">' +
-        '<div class="tl-t">' + esc(title) + '</div>' +
-        (e.note ? '<div class="tl-m">' + esc(e.note) + '</div>' : '') +
+        '<div class="tl-t">' + esc(title) + (e.version ? ' <span class="muted">v' + e.version + '</span>' : '') + '</div>' +
+        (e.note ? '<div class="tl-m">' + esc(e.note) + attachedHere + '</div>' : (attachedHere ? '<div class="tl-m">' + attachedHere + '</div>' : '')) +
         '<div class="tl-d">' + esc(e.actor_name || 'System') + ' · ' + esc(whenText(e.created_at)) + '</div></li>';
     }).join('') : '<li><div class="tl-m">Nothing recorded yet.</div></li>';
 
@@ -984,6 +1053,7 @@
               '" data-rfpact="' + esc(a[0]) + '">' + esc(a[1]) + '</button>';
           }).join('') + '</div>'
         : '') +
+      attach +
       '<div class="sec-title">Add a note</div>' +
       '<div class="field"><textarea id="rdNote" rows="2" placeholder="What changed, what is still needed"></textarea></div>' +
       '<button class="btn sm" id="rdNoteSave">Post note</button>' +
@@ -1168,6 +1238,33 @@
               ? '<button class="btn sm" data-emdedit="' + esc(e.id) + '">Edit</button>' : '') + '</td></tr>';
         }).join('') + '</tbody></table></div>'
       : empty(state.emdFilter === 'out' ? 'Nothing is outstanding.' : 'Nothing recorded yet.');
+  }
+
+  /* The VP's and Founder's work list. Shown only to them: for anyone else it
+     would be a list of things they cannot act on, which is just noise. */
+  function renderDecisionQueue(all) {
+    if (!WVT.canApprove()) { show('decisionQueueCard', false); return; }
+    var rows = WVT.awaitingDecision(all);
+    show('decisionQueueCard', rows.length > 0);
+    if (!rows.length) return;
+
+    $('decisionQueue').innerHTML = '<div class="tbl-wrap"><table><thead><tr>' +
+      '<th>Tender</th><th>Authority</th><th>Value</th><th>Closes</th><th>Waiting</th><th></th>' +
+      '</tr></thead><tbody>' + rows.map(function (t) {
+        var waited = t.decision_requested_at
+          ? Math.max(0, Math.round((Date.now() - new Date(t.decision_requested_at)) / 86400000))
+          : null;
+        var d = WVT.deadlineState(t);
+        return '<tr>' +
+          '<td><a href="#" data-tender="' + esc(t.id) + '">' + esc(t.title) + '</a></td>' +
+          '<td>' + esc(t.authority || '—') + '</td>' +
+          '<td class="num">' + esc(shortMoney(t.estimated_value)) + '</td>' +
+          '<td>' + esc(WVT.fmtDate(t.submission_date)) +
+            ' <span class="age ' + d.cls + '">' + esc(d.label) + '</span></td>' +
+          '<td>' + (waited == null ? '—' : waited + 'd') + '</td>' +
+          '<td><button class="btn sm primary" data-decide="' + esc(t.id) + '">Decide</button></td>' +
+          '</tr>';
+      }).join('') + '</tbody></table></div>';
   }
 
   /* ========================================================================
@@ -1559,6 +1656,10 @@
        reads like a bug rather than a rule. */
     if (!WVT.canEditEmd()) {
       return WV.toast('Only the tender team can record EMD and fees.');
+    }
+    var gate = WVT.tenderById(tenderId || state.emdTenderId);
+    if (!emdId && gate && !WVT.isApproved(gate)) {
+      return WV.toast('No money goes out before a Go. Ask the VP or Founder to approve this tender first.');
     }
     state.editEmdId = emdId || null;
     state.emdTenderId = tenderId || null;
@@ -2130,6 +2231,7 @@
         x.setAttribute('aria-pressed', x === b ? 'true' : 'false');
       });
       renderUpcoming();
+    renderDecisionQueue(all);
     });
 
     /* --- tender list --- */
@@ -2190,6 +2292,9 @@
         if (state.detailId) openBidEditor(state.detailId, null);
         return;
       }
+      if ((el = e.target.closest('[data-decide]'))) {
+        return openDecideEditor(el.getAttribute('data-decide'));
+      }
       if (e.target.id === 'corrAdd') {
         if (state.detailId) openCorrEditor(state.detailId);
         return;
@@ -2235,6 +2340,19 @@
         if (!cr.ok) return WV.toast(cr.error);
         WV.toast('Comment posted');
         state.detailTab = 'talk'; renderDetail();
+        return;
+      }
+      if (e.target.id === 'rdAttach') {
+        var fEl = $('rdFile');
+        var file = fEl && fEl.files && fEl.files[0];
+        var link = $('rdLink') ? $('rdLink').value.trim() : '';
+        e.target.disabled = true;
+        var ar = await WVT.attachRfpCopy(state.rfpDetailId, file, link);
+        e.target.disabled = false;
+        if (!ar.ok) return banner('rdAttachBanner', ar.error, 'bad');
+        WV.toast('Attached as v' + ar.version);
+        await refresh();
+        await openRfpDetail(state.rfpDetailId);
         return;
       }
       if (e.target.id === 'rdNoteSave') {
@@ -2349,6 +2467,7 @@
     on('teStage', 'change', syncStatusFields);
     on('teSubmitted', 'change', syncStatusFields);
     on('teLossReason', 'change', syncStatusFields);
+    on('teElig2', 'change', syncStatusFields);
 
     /* --- misc --- */
     on('exportBtn', 'click', exportCsv);
