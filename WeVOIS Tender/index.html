@@ -388,11 +388,51 @@
 
       <div class="sec-title">Status</div>
       <div class="form-grid">
-        <div class="field"><label for="teStage">Stage</label><select id="teStage"></select></div>
+        <div class="field"><label for="teStage">Stage</label><select id="teStage"></select>
+          <div class="hint" id="teStageHelp">&nbsp;</div></div>
         <div class="field"><label for="teGo">Go / No-Go</label><select id="teGo"></select></div>
         <div class="field full"><label for="teGoWhy">Reason for the decision</label><input id="teGoWhy" type="text"></div>
         <div class="field full"><label for="teElig">Eligibility notes</label><textarea id="teElig" rows="2"></textarea></div>
         <div class="field full"><label for="teRemark">Remarks</label><textarea id="teRemark" rows="2"></textarea></div>
+      </div>
+
+      <!-- Whether the bid was actually filed is its own fact, not something
+           read off the stage. Stages float freely, so a tender can sit in PPT
+           long after submission, or be dragged backwards by mistake. -->
+      <div class="sec-title">Submission</div>
+      <div class="form-grid">
+        <div class="field full">
+          <label class="checks" style="display:flex"><input type="checkbox" id="teSubmitted">
+            <span>The bid has been filed with the authority</span></label>
+          <div class="hint">Ticking this is what opens the EMD, rank and result fields, and stops the deadline countdown.</div>
+        </div>
+        <div class="field" id="teSubOnWrap" style="display:none">
+          <label for="teSubmittedOn">Filed on</label><input id="teSubmittedOn" type="date">
+        </div>
+      </div>
+
+      <!-- Outcome. Hidden until there is something to record. -->
+      <div id="teOutcomeWrap" style="display:none">
+        <div class="sec-title">Outcome</div>
+        <div class="form-grid">
+          <div class="field"><label for="teQuoted">Our quote (₹)</label><input id="teQuoted" type="number" min="0" step="1"></div>
+          <div class="field"><label for="teRank">Our rank</label><input id="teRank" type="text" placeholder="L1"></div>
+          <div class="field"><label for="teResultDate">Result declared on</label><input id="teResultDate" type="date"></div>
+          <div class="field"><label for="teAwardedTo">Awarded to</label><input id="teAwardedTo" type="text" placeholder="Whoever won it"></div>
+          <div class="field"><label for="teAwardedValue">Awarded at (₹)</label><input id="teAwardedValue" type="number" min="0" step="1"></div>
+        </div>
+        <!-- Only when the stage says we did not win. -->
+        <div id="teLossWrap" style="display:none">
+          <div class="form-grid">
+            <div class="field"><label for="teLossReason">Why we did not win *</label><select id="teLossReason"></select></div>
+            <div class="field full" id="teLossNoteWrap"><label for="teLossNotes">What happened</label>
+              <input id="teLossNotes" type="text" placeholder="The detail worth remembering next time">
+              <div class="hint" id="teLossNoteHint">&nbsp;</div></div>
+          </div>
+        </div>
+        <div class="form-grid">
+          <div class="field full"><label for="teResultNotes">Result notes</label><textarea id="teResultNotes" rows="2"></textarea></div>
+        </div>
       </div>
 
       <div id="teSeedWrap">
@@ -421,12 +461,14 @@
         <button type="button" data-d="info"  aria-selected="true">Details</button>
         <button type="button" data-d="check" aria-selected="false">Checklist</button>
         <button type="button" data-d="emd"   aria-selected="false">EMD &amp; fees</button>
+        <button type="button" data-d="corr"  aria-selected="false">Corrigenda</button>
         <button type="button" data-d="rfp"   aria-selected="false">RFP requests</button>
         <button type="button" data-d="talk"  aria-selected="false">Comments</button>
       </div>
       <div id="dInfo"></div>
       <div id="dCheck" style="display:none"></div>
       <div id="dEmd"   style="display:none"></div>
+      <div id="dCorr"  style="display:none"></div>
       <div id="dRfp"   style="display:none"></div>
       <div id="dTalk"  style="display:none"></div>
     </div>
@@ -537,6 +579,50 @@
       <button class="btn danger" id="eeDelete" style="display:none;margin-right:auto">Delete</button>
       <button class="btn" data-close>Cancel</button>
       <button class="btn primary" id="eeSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Corrigendum. Opens on top of an open tender file, so it is in STACKABLE. -->
+<div class="overlay" id="corrOverlay">
+  <div class="modal">
+    <div class="modal-h">
+      <div><h3 id="coTitle">Record a corrigendum</h3><p id="coSub"></p></div>
+      <button class="x" data-close>✕</button>
+    </div>
+    <div class="modal-b">
+      <div class="banner" id="coBanner" style="display:none"></div>
+      <div class="form-grid">
+        <div class="field"><label for="coNo">Corrigendum no.</label><input id="coNo" type="text" placeholder="1"></div>
+        <div class="field"><label for="coIssued">Issued on</label><input id="coIssued" type="date"></div>
+        <div class="field full"><label for="coSummary">What it changed *</label>
+          <input id="coSummary" type="text" placeholder="Submission deadline extended by 14 days"></div>
+        <div class="field full"><label for="coUrl">Link to the corrigendum</label><input id="coUrl" type="url"></div>
+      </div>
+
+      <div class="sec-title">Revised dates</div>
+      <p class="hint" style="margin:-4px 0 10px">
+        Fill in only the dates this corrigendum actually changed — a blank box
+        means that date stayed as it was. Anything you enter here replaces the
+        date on the tender, and the old one is kept on this record.
+      </p>
+      <div class="form-grid">
+        <div class="field"><label for="coPre">Pre-bid meeting</label><input id="coPre" type="date">
+          <div class="hint" id="coPreNow">&nbsp;</div></div>
+        <div class="field"><label for="coQuery">Last date for queries</label><input id="coQuery" type="date">
+          <div class="hint" id="coQueryNow">&nbsp;</div></div>
+        <div class="field"><label for="coSubDate">Submission deadline</label><input id="coSubDate" type="date">
+          <div class="hint" id="coSubNow">&nbsp;</div></div>
+        <div class="field"><label for="coOpen">Bid opening</label><input id="coOpen" type="date">
+          <div class="hint" id="coOpenNow">&nbsp;</div></div>
+      </div>
+
+      <label class="checks" style="display:flex"><input type="checkbox" id="coPortal" checked>
+        <span>The portal has been updated with this corrigendum</span></label>
+    </div>
+    <div class="modal-f">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn primary" id="coSave">Save corrigendum</button>
     </div>
   </div>
 </div>

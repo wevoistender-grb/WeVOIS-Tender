@@ -15,13 +15,36 @@ neither can break the other.
 
 **Tenders** — the full file on every bid: NIT number, authority, city, region,
 owning team, scope, estimated value, EMD, fees, and every date that matters
-(published, pre-bid, queries close, submission, opening). Moves through a
-pipeline of Spotted → Under Review → Go/No-Go → Documents → Ready → Submitted →
-Bid Opened → Closed, then records the result, our rank and what it was awarded at.
+(published, pre-bid, queries close, submission, opening).
+
+**Stages** — Spotted, Under Review, RFP, NIT, Go/No-Go, Documents, Proposal,
+PPT, Ready, Submitted, Bid Opened, Awarded, Not Awarded, Closed.
+
+These **float freely**. There is no fixed order and nothing is enforced: set
+whichever stage describes where the tender actually is, go backwards, or skip
+half of them. Real tenders do not queue politely, and a system that insists they
+do just gets filled with lies.
+
+Because of that, **whether the bid was filed is its own tick box**, not
+something read off the stage. Ticking it is what stops the deadline countdown
+and opens the EMD, rank and result fields. A tender can sit in PPT long after
+it was submitted without confusing anything.
+
+Picking **Awarded** or **Not Awarded** records the result for you — one field,
+not two to keep in step. **Not Awarded demands a reason**: Technical, Financial,
+Wrong documents uploaded, or Other with a note. That is the only way the pattern
+in why you lose ever becomes visible. Move a tender back out of an outcome
+stage and the recorded result clears itself, so nothing stale is left behind.
+
+**Corrigenda** — amendments the authority issues against a live tender. Not a
+stage: one can arrive at any point and the tender carries on from wherever it
+was. Record it with the dates it revised, and those dates are applied to the
+tender itself — the portal has been updated, so your copy has to move too. What
+the dates were before is kept on the corrigendum, so the history survives.
 
 **Deadlines** — a "closing in the next 15 days" list (switchable to 7 or 30) with
 countdown chips that go amber at a week and red at three days. Anything past its
-date and still not submitted is flagged at the top of the dashboard.
+date and still not filed is flagged at the top of the dashboard.
 
 **RFP requests** — anyone can ask the tender team to prepare a document. Every
 step is timestamped by the database: Requested → Accepted → In Preparation →
@@ -76,6 +99,7 @@ Supabase for the database, auth and file storage. Installable as a PWA.
 | `tender-app.js` | Screens and behaviour |
 | `tender-theme.css` | Design system |
 | `TENDER-SETUP.sql` | The entire database. Safe to run more than once |
+| `TENDER-STAGES-UPDATE.sql` | One-off migration for a database created before the stage rework. Not needed for a fresh install |
 
 ## A note on `supabase-config.js`
 

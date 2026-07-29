@@ -117,11 +117,16 @@ create table if not exists public.tenders (
   submitted_by      text,
   quoted_value      numeric,
   our_rank          text,                    -- L1, L2, ...
-  result            text,                    -- Awarded | Lost | Cancelled | Pending
+  result            text,                    -- Pending | Awarded | Not Awarded | Cancelled
   result_date       date,
   awarded_to        text,
   awarded_value     numeric,
   result_notes      text,
+  -- why a bid did not win. Plain text with no check constraint, like stage and
+  -- result above: the vocabulary lives in the app, so adding a reason later
+  -- needs no migration.
+  loss_reason       text,                    -- Technical | Financial | Wrong documents uploaded | Other
+  loss_reason_notes text,
   remarks           text,
   created_by        text,
   created_at        timestamptz not null default now(),
@@ -246,6 +251,33 @@ create table if not exists public.tender_comments (
   created_at  timestamptz not null default now()
 );
 
+-- 1.10b  Corrigenda - amendments the authority issues against a live tender.
+--        NOT a pipeline stage: one can arrive at any point and the tender
+--        carries on from wherever it was. What it usually does is move dates,
+--        and because the portal is updated at the same time the tender's own
+--        dates move with it.
+--          new_*  = what this corrigendum changed the date TO (null = untouched)
+--          prev_* = what it was immediately before, so the history survives
+create table if not exists public.tender_corrigenda (
+  id                   text primary key default gen_random_uuid()::text,
+  tender_id            text not null references public.tenders(id) on delete cascade,
+  corrigendum_no       text,
+  issued_date          date,
+  summary              text,
+  portal_updated       boolean not null default false,
+  doc_url              text,
+  new_pre_bid_date     date,
+  new_query_last_date  date,
+  new_submission_date  date,
+  new_opening_date     date,
+  prev_pre_bid_date    date,
+  prev_query_last_date date,
+  prev_submission_date date,
+  prev_opening_date    date,
+  created_by           text,
+  created_at           timestamptz not null default now()
+);
+
 -- 1.11  Bell notifications.
 create table if not exists public.notifications (
   id               bigint generated always as identity primary key,
@@ -347,6 +379,14 @@ create index if not exists rfp_status_idx        on public.tender_rfp_requests (
 create index if not exists rfp_requester_idx     on public.tender_rfp_requests (requested_by);
 create index if not exists rfp_events_req_idx    on public.tender_rfp_events (request_id, created_at);
 create index if not exists tcomments_tender_idx  on public.tender_comments (tender_id, created_at);
+comment on table public.tender_corrigenda is
+  'One row per corrigendum issued against a tender. Append-only in practice: the prev_* columns are the audit trail of what the dates were before.';
+comment on column public.tenders.loss_reason is
+  'Why we did not win: Technical | Financial | Wrong documents uploaded | Other. Only meaningful when result = ''Not Awarded''.';
+comment on column public.tenders.loss_reason_notes is
+  'Free text detail, used mainly when loss_reason = ''Other''.';
+
+create index if not exists tcorr_tender_idx      on public.tender_corrigenda (tender_id, issued_date desc);
 create index if not exists cdocs_expiry_idx      on public.tender_company_docs (expiry_date);
 create index if not exists notifications_time_idx on public.notifications (created_at desc);
 create index if not exists activity_time_idx     on public.activity_logs (created_at desc);
@@ -440,6 +480,56 @@ end $$;
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created after insert on auth.users
   for each row execute function public.handle_new_auth_user();
+
+
+-- Keep result in step with the Awarded / Not Awarded stages.
+--
+-- Stages float freely - any stage can be set at any time - so the outcome
+-- stages are the natural place to say how a bid ended. But the dashboard, the
+-- win rate and the CSV all read the result column. Syncing here rather than in
+-- the browser means it holds however the row was written: the app, a bulk
+-- update, or a query typed into the SQL editor.
+--
+-- One way only: stage drives result. Setting result on its own still works, so
+-- a tender can be marked Cancelled without a matching stage.
+create or replace function public.wv_tender_sync_result()
+returns trigger
+language plpgsql
+as $fn$
+begin
+  if new.stage = 'Awarded' then
+    new.result := 'Awarded';
+
+  elsif new.stage = 'Not Awarded' then
+    new.result := 'Not Awarded';
+
+  elsif tg_op = 'UPDATE'
+        and old.stage in ('Awarded', 'Not Awarded')
+        and new.stage not in ('Awarded', 'Not Awarded') then
+    -- Dragged back into the pipeline: the recorded outcome no longer holds.
+    new.result      := 'Pending';
+    new.result_date := null;
+  end if;
+
+  -- Stamp the day the outcome was recorded, if nobody supplied one.
+  if new.result in ('Awarded', 'Not Awarded') and new.result_date is null then
+    new.result_date := current_date;
+  end if;
+
+  -- A loss reason on anything other than a loss is noise. Clear it.
+  if new.result is distinct from 'Not Awarded' then
+    new.loss_reason       := null;
+    new.loss_reason_notes := null;
+  end if;
+
+  return new;
+end
+$fn$;
+
+drop trigger if exists tenders_sync_result on public.tenders;
+create trigger tenders_sync_result
+  before insert or update on public.tenders
+  for each row execute function public.wv_tender_sync_result();
 
 
 -- ===========================================================================
@@ -622,6 +712,7 @@ alter table public.tender_checklist    enable row level security;
 alter table public.tender_rfp_requests enable row level security;
 alter table public.tender_rfp_events   enable row level security;
 alter table public.tender_comments     enable row level security;
+alter table public.tender_corrigenda   enable row level security;
 alter table public.notifications       enable row level security;
 alter table public.activity_logs       enable row level security;
 
@@ -669,6 +760,11 @@ create policy temd_all on public.tender_emd for all to authenticated
 drop policy if exists tchk_all on public.tender_checklist;
 create policy tchk_all on public.tender_checklist for all to authenticated
   using (exists (select 1 from public.tenders t where t.id = tender_id))
+  with check (exists (select 1 from public.tenders t where t.id = tender_id));
+
+drop policy if exists tcorr_all on public.tender_corrigenda;
+create policy tcorr_all on public.tender_corrigenda for all to authenticated
+  using      (exists (select 1 from public.tenders t where t.id = tender_id))
   with check (exists (select 1 from public.tenders t where t.id = tender_id));
 
 drop policy if exists tcom_read  on public.tender_comments;
@@ -728,7 +824,7 @@ create policy audit_insert on public.activity_logs for insert to authenticated w
 
 -- ===========================================================================
 --  SECTION 9 - VERIFICATION
---  Expect:  12  -  3  -  7  -  23  -  12  -  true
+--  Expect:  13  -  3  -  7  -  23  -  13  -  true
 --  tables, regions, org units, standard documents, RLS-protected tables,
 --  and "the system is brand new, go and create the first administrator".
 -- ===========================================================================
@@ -738,7 +834,7 @@ select
       and table_name in ('user_profiles','tender_regions','tender_teams','tenders',
                          'tender_emd','tender_company_docs','tender_checklist',
                          'tender_rfp_requests','tender_rfp_events','tender_comments',
-                         'notifications','activity_logs')
+                         'tender_corrigenda','notifications','activity_logs')
   ) as tables_found,
   (select count(*) from public.tender_regions)      as regions_seeded,
   (select count(*) from public.tender_teams)        as org_units_seeded,

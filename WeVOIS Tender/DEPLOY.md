@@ -22,13 +22,32 @@ You should get exactly one row back:
 
 | tables_found | regions_seeded | org_units_seeded | standard_docs_seeded | rls_enabled | needs_first_run |
 |---|---|---|---|---|---|
-| 12 | 3 | 7 | 23 | 12 | true |
+| 13 | 3 | 7 | 23 | 13 | true |
 
 If any number differs, stop and check the error rather than carrying on.
 
 > **Why "select the whole file" matters.** The Supabase SQL editor runs only the
 > *selected* text when a selection exists. A selection that starts a few
 > characters into line 1 fails with a confusing syntax error on line 1.
+
+### Already have a database from before the stage rework?
+
+Yours was built when there were 12 tables, and it will still say 12. Do **not**
+re-run `TENDER-SETUP.sql` hoping to pick up the changes: `create table if not
+exists` will not add columns to a table that already exists, so it would appear
+to succeed and change nothing.
+
+Run **`TENDER-STAGES-UPDATE.sql`** once instead — same select-all rule. It adds
+the two loss-reason columns, the `tender_corrigenda` table, and the trigger that
+keeps `result` in step with the Awarded / Not Awarded stages, and it backfills
+`submitted_at` for anything that had already reached a post-submission stage
+under the old ordered model. It is idempotent; running it twice is harmless.
+
+Expect the row:
+
+| new_tender_columns | corrigenda_table | corrigenda_rls | result_trigger | stale_lost_rows |
+|---|---|---|---|---|
+| 2 | 1 | true | true | 0 |
 
 ## 3. Two settings in Supabase
 

@@ -15,6 +15,7 @@
     detailId: null,
     editId: null,
     editEmdId: null,
+    corrTenderId: null,
     editDocId: null,
     editTeamId: null,
     editPersonId: null,
@@ -52,12 +53,12 @@
   function empty(msg) { return '<div class="empty">' + esc(msg) + '</div>'; }
 
   /* --- stacked overlays ---------------------------------------------------
-     The EMD and RFP dialogs can open ON TOP of an open tender file. WV's
-     global handler closes EVERY overlay, which would drop the user back to the
-     dashboard instead of back to the tender they were working on. So when one
-     of these is stacked we close only the top one, and swallow the event
-     before the global handler sees it. */
-  var STACKABLE = ['emdOverlay', 'rfpOverlay'];
+     The EMD, RFP and corrigendum dialogs can open ON TOP of an open tender
+     file. WV's global handler closes EVERY overlay, which would drop the user
+     back to the dashboard instead of back to the tender they were working on.
+     So when one of these is stacked we close only the top one, and swallow the
+     event before the global handler sees it. */
+  var STACKABLE = ['emdOverlay', 'rfpOverlay', 'corrOverlay'];
 
   function detailOpen() {
     var el = $('detailOverlay');
@@ -138,16 +139,30 @@
 
     renderUpcoming();
 
-    /* Pipeline funnel */
+    /* Where everything is sitting.
+     *
+     * This used to be drawn as a funnel. A funnel claims each bar is a subset
+     * of the one above it - that things flow downwards and narrow. Stages float
+     * freely now, so that claim would be a lie: a tender can be in PPT without
+     * ever having been in Documents. It is a plain count per stage, and stages
+     * nothing is in are hidden rather than drawn as a row of zeroes. */
     var counts = WVT.stageCounts(all);
-    var peak = Math.max.apply(null, WVT.STAGES.map(function (x) { return counts[x]; }).concat([1]));
-    $('funnelRows').innerHTML = WVT.STAGES.map(function (st) {
-      var n = counts[st] || 0;
-      return '<div class="funnel-row">' +
-        '<span class="fl" title="' + esc(WVT.STAGE_HELP[st] || '') + '">' + esc(st) + '</span>' +
-        '<span class="track"><i class="fill" style="width:' + (peak ? (n / peak) * 100 : 0) + '%;background:var(--brand)"></i></span>' +
-        '<span class="fv">' + n + '</span></div>';
-    }).join('');
+    var used = WVT.STAGES.filter(function (st) { return (counts[st] || 0) > 0; });
+    var peak = Math.max.apply(null, used.map(function (x) { return counts[x]; }).concat([1]));
+
+    $('funnelRows').innerHTML = used.length
+      ? used.map(function (st) {
+          var n = counts[st] || 0;
+          var col = st === 'Awarded' ? 'var(--good)'
+                  : st === 'Not Awarded' ? 'var(--bad)'
+                  : st === 'Closed' ? 'var(--muted)'
+                  : 'var(--brand)';
+          return '<div class="funnel-row">' +
+            '<span class="fl" title="' + esc(WVT.STAGE_HELP[st] || '') + '">' + esc(st) + '</span>' +
+            '<span class="track"><i class="fill" style="width:' + (peak ? (n / peak) * 100 : 0) + '%;background:' + col + '"></i></span>' +
+            '<span class="fv">' + n + '</span></div>';
+        }).join('')
+      : empty('No tenders yet.');
 
     /* Region chart */
     var rc = WVT.regionCounts(all);
@@ -384,6 +399,21 @@
     setVal('teElig', t && t.eligibility_notes);
     setVal('teRemark', t && t.remarks);
 
+    /* Submission is a fact somebody ticks, not something inferred from stage. */
+    setChk('teSubmitted', !!(t && t.submitted_at));
+    setVal('teSubmittedOn', t && t.submitted_at ? String(t.submitted_at).slice(0, 10) : '');
+
+    /* Outcome */
+    $('teLossReason').innerHTML = opts(WVT.LOSS_REASONS, t ? t.loss_reason : '', 'Choose a reason');
+    setVal('teQuoted', t && t.quoted_value);
+    setVal('teRank', t && t.our_rank);
+    setVal('teResultDate', t && t.result_date);
+    setVal('teAwardedTo', t && t.awarded_to);
+    setVal('teAwardedValue', t && t.awarded_value);
+    setVal('teLossNotes', t && t.loss_reason_notes);
+    setVal('teResultNotes', t && t.result_notes);
+    syncStatusFields();
+
     $('teSeedN').textContent = String(WVT.data.companyDocs.length);
     show('teSeedWrap', !t);
     setChk('teSeed', true);
@@ -393,6 +423,31 @@
       ? 'Changes are visible to everyone who can see this tender'
       : 'Upload the notice PDF and the details fill themselves in';
     banner('teBanner', '');
+  }
+
+  /* Shows only the parts of the form that can mean anything right now.
+     Called on open and on every change to the stage or the submitted tick. */
+  function syncStatusFields() {
+    var stage = val('teStage');
+    var filed = $('teSubmitted') && $('teSubmitted').checked;
+    var lost  = stage === 'Not Awarded';
+    var won   = stage === 'Awarded';
+
+    $('teStageHelp').textContent = WVT.STAGE_HELP[stage] || ' ';
+
+    show('teSubOnWrap', !!filed);
+    /* WV.todayInput() gives YYYY-MM-DD for a date input. WVT.today() is a Date
+       object for arithmetic - not interchangeable. */
+    if (filed && !val('teSubmittedOn')) setVal('teSubmittedOn', WV.todayInput());
+
+    /* There is nothing to record about an outcome until the bid went in or the
+       stage already says how it ended. */
+    show('teOutcomeWrap', !!filed || won || lost);
+    show('teLossWrap', lost);
+
+    $('teLossNoteHint').textContent = val('teLossReason') === 'Other'
+      ? 'Required, because "Other" on its own tells the next person nothing.'
+      : ' ';
   }
 
   function openTenderEditor(id) {
@@ -440,17 +495,53 @@
       go_no_go: go === 'Undecided' ? null : go,
       go_no_go_reason: val('teGoWhy') || null,
       eligibility_notes: val('teElig') || null,
-      remarks: val('teRemark') || null
+      remarks: val('teRemark') || null,
+      quoted_value: numOrNull('teQuoted'),
+      our_rank: val('teRank') || null,
+      result_date: dateOrNull('teResultDate'),
+      awarded_to: val('teAwardedTo') || null,
+      awarded_value: numOrNull('teAwardedValue'),
+      result_notes: val('teResultNotes') || null
     };
 
+    /* A loss with no reason is the whole point of this field, so insist. */
+    if (body.stage === 'Not Awarded') {
+      if (!val('teLossReason')) {
+        return banner('teBanner', 'Choose why this one did not go our way — it is the only way the pattern ever shows up.', 'bad');
+      }
+      if (val('teLossReason') === 'Other' && !val('teLossNotes')) {
+        return banner('teBanner', '"Other" needs a note, otherwise it tells the next person nothing.', 'bad');
+      }
+      body.loss_reason = val('teLossReason');
+      body.loss_reason_notes = val('teLossNotes') || null;
+    } else {
+      /* The database trigger clears these too; doing it here as well keeps the
+         local copy honest without waiting for a reload. */
+      body.loss_reason = null;
+      body.loss_reason_notes = null;
+    }
+
+    /* Submission: the tick is the truth. Untick it and the tender goes back to
+       being live, countdown and all. */
+    var filed = $('teSubmitted').checked;
     var existing = state.editId ? WVT.tenderById(state.editId) : null;
+    if (filed) {
+      var on = dateOrNull('teSubmittedOn');
+      var had = existing && existing.submitted_at;
+      /* Keep the original timestamp when the date has not been changed, so
+         re-saving a tender does not quietly rewrite when it was filed. */
+      body.submitted_at = (had && String(had).slice(0, 10) === on)
+        ? had
+        : new Date((on || WV.todayInput()) + 'T00:00:00').toISOString();
+      body.submitted_by = (existing && existing.submitted_by) || String(WV.currentUser.id);
+    } else {
+      body.submitted_at = null;
+      body.submitted_by = null;
+    }
+
     if (body.go_no_go && (!existing || existing.go_no_go !== body.go_no_go)) {
       body.go_no_go_by = String(WV.currentUser.id);
       body.go_no_go_at = new Date().toISOString();
-    }
-    if (body.stage === 'Submitted' && (!existing || existing.stage !== 'Submitted')) {
-      body.submitted_at = new Date().toISOString();
-      body.submitted_by = String(WV.currentUser.id);
     }
     if (!state.editId) body.created_by = String(WV.currentUser.id);
 
@@ -553,13 +644,14 @@
     WV.$$('#dTabs button').forEach(function (b) {
       b.setAttribute('aria-selected', b.getAttribute('data-d') === state.detailTab ? 'true' : 'false');
     });
-    ['info', 'check', 'emd', 'rfp', 'talk'].forEach(function (k) {
+    ['info', 'check', 'emd', 'corr', 'rfp', 'talk'].forEach(function (k) {
       show('d' + k.charAt(0).toUpperCase() + k.slice(1), k === state.detailTab);
     });
 
     if (state.detailTab === 'info')  renderDetailInfo(t);
     if (state.detailTab === 'check') renderDetailCheck(t);
     if (state.detailTab === 'emd')   renderDetailEmd(t);
+    if (state.detailTab === 'corr')  renderDetailCorr(t);
     if (state.detailTab === 'rfp')   renderDetailRfp(t);
     if (state.detailTab === 'talk')  renderDetailTalk(t);
   }
@@ -594,10 +686,24 @@
     if (t.eligibility_notes) rows.push(['Eligibility', esc(t.eligibility_notes)]);
     if (t.remarks)           rows.push(['Remarks', esc(t.remarks)]);
     if (t.submitted_at)      rows.push(['Submitted on', esc(whenText(t.submitted_at)) + ' by ' + esc(WVT.personName(t.submitted_by))]);
-    if (t.result === 'Awarded' || t.result === 'Lost') {
+    if (t.result === 'Awarded' || t.result === 'Not Awarded') {
       rows.push(['Quoted', esc(money(t.quoted_value))]);
       rows.push(['Awarded to', esc(t.awarded_to || '—')]);
       rows.push(['Awarded value', esc(money(t.awarded_value))]);
+      rows.push(['Result declared', esc(WVT.fmtDate(t.result_date))]);
+    }
+    if (t.result === 'Not Awarded') {
+      rows.push(['Why we lost', '<b>' + esc(t.loss_reason || 'Not recorded') + '</b>' +
+        (t.loss_reason_notes ? ' <span class="muted">— ' + esc(t.loss_reason_notes) + '</span>' : '')]);
+    }
+    if (t.result_notes) rows.push(['Result notes', esc(t.result_notes)]);
+
+    var nCorr = WVT.corrigendumCount(t.id);
+    if (nCorr) {
+      var latest = WVT.corrigendaFor(t.id)[0];
+      rows.splice(1, 0, ['Corrigenda',
+        '<b>' + nCorr + '</b> issued' +
+        (latest && latest.issued_date ? ' <span class="muted">— latest ' + esc(WVT.fmtDate(latest.issued_date)) + '</span>' : '')]);
     }
 
     $('dInfo').innerHTML = '<dl class="kv">' + rows.map(function (r) {
@@ -1012,6 +1118,112 @@
       : empty(state.emdFilter === 'out' ? 'Nothing is outstanding.' : 'Nothing recorded yet.');
   }
 
+  /* ========================================================================
+     CORRIGENDA
+     ======================================================================== */
+
+  function corrDateCell(prev, next) {
+    if (!next) return '<span class="muted">—</span>';
+    if (!prev) return esc(WVT.fmtDate(next)) + ' <span class="muted">(was blank)</span>';
+    return '<span class="muted" style="text-decoration:line-through">' + esc(WVT.fmtDate(prev)) +
+           '</span> → <b>' + esc(WVT.fmtDate(next)) + '</b>';
+  }
+
+  function renderDetailCorr(t) {
+    var rows = WVT.corrigendaFor(t.id);
+    var editable = WVT.canEdit(t);
+
+    var head = '<div class="card-head" style="margin-bottom:12px">' +
+      '<div><b>' + rows.length + ' corrigend' + (rows.length === 1 ? 'um' : 'a') + '</b>' +
+      '<div class="muted" style="margin-top:4px">Amendments the authority issued against this tender. ' +
+      'Revised dates here have already been applied above.</div></div>' +
+      (editable ? '<button class="btn sm primary" id="corrAdd">＋ Corrigendum</button>' : '') +
+      '</div>';
+
+    var body = rows.length
+      ? '<div class="tbl-wrap"><table><thead><tr>' +
+        '<th>No.</th><th>Issued</th><th>What changed</th>' +
+        '<th>Submission</th><th>Opening</th><th>Portal</th><th></th>' +
+        '</tr></thead><tbody>' +
+        rows.map(function (c) {
+          return '<tr>' +
+            '<td>' + esc(c.corrigendum_no || '—') + '</td>' +
+            '<td>' + esc(WVT.fmtDate(c.issued_date)) + '</td>' +
+            '<td>' + esc(c.summary || '—') +
+              (c.doc_url ? ' <a href="' + esc(c.doc_url) + '" target="_blank" rel="noopener">link</a>' : '') + '</td>' +
+            '<td>' + corrDateCell(c.prev_submission_date, c.new_submission_date) + '</td>' +
+            '<td>' + corrDateCell(c.prev_opening_date, c.new_opening_date) + '</td>' +
+            '<td>' + (c.portal_updated
+              ? '<span class="badge b-paid">Updated</span>'
+              : '<span class="badge b-hold">Not yet</span>') + '</td>' +
+            '<td>' + (editable
+              ? '<button class="btn sm danger" data-corrdel="' + esc(c.id) + '">Remove</button>' : '') + '</td>' +
+            '</tr>';
+        }).join('') + '</tbody></table></div>'
+      : empty('No corrigendum yet. Record one when the authority amends this tender.');
+
+    $('dCorr').innerHTML = head + body;
+  }
+
+  function openCorrEditor(tenderId) {
+    var t = WVT.tenderById(tenderId);
+    if (!t) return;
+    state.corrTenderId = tenderId;
+
+    $('coSub').textContent = t.title;
+    setVal('coNo', String(WVT.corrigendumCount(tenderId) + 1));
+    setVal('coIssued', WV.todayInput());
+    ['coSummary', 'coUrl', 'coPre', 'coQuery', 'coSubDate', 'coOpen'].forEach(function (id) { setVal(id, ''); });
+    setChk('coPortal', true);
+
+    /* Show what each date is right now, so nobody has to go and look. */
+    function now(id, v) {
+      $(id).textContent = v ? 'Currently ' + WVT.fmtDate(v) : 'Not set';
+    }
+    now('coPreNow', t.pre_bid_date);
+    now('coQueryNow', t.query_last_date);
+    now('coSubNow', t.submission_date);
+    now('coOpenNow', t.opening_date);
+
+    banner('coBanner', '');
+    WV.openOverlay('corrOverlay');
+  }
+
+  async function saveCorrigendum() {
+    var summary = val('coSummary');
+    if (!summary) return banner('coBanner', 'Say what the corrigendum changed.', 'bad');
+
+    var btn = $('coSave');
+    btn.disabled = true;
+    var r = await WVT.saveCorrigendum(state.corrTenderId, {
+      corrigendum_no: val('coNo'),
+      issued_date: dateOrNull('coIssued'),
+      summary: summary,
+      doc_url: val('coUrl') || null,
+      portal_updated: $('coPortal').checked,
+      new_pre_bid_date: dateOrNull('coPre'),
+      new_query_last_date: dateOrNull('coQuery'),
+      new_submission_date: dateOrNull('coSubDate'),
+      new_opening_date: dateOrNull('coOpen')
+    });
+    btn.disabled = false;
+
+    if (!r.ok) return banner('coBanner', 'Could not save: ' + r.error, 'bad');
+    if (r.datesFailed) {
+      return banner('coBanner',
+        'The corrigendum was saved, but the tender dates could not be updated: ' + r.error +
+        ' — change them on the tender by hand.', 'bad');
+    }
+
+    await WV.logActivity('Corrigendum recorded', summary, state.corrTenderId);
+    closeTop('corrOverlay');
+    WV.toast(r.moved.length
+      ? 'Corrigendum saved — ' + r.moved.length + ' date' + (r.moved.length === 1 ? '' : 's') + ' updated'
+      : 'Corrigendum saved');
+    render();
+    if (state.detailId) { state.detailTab = 'corr'; renderDetail(); }
+  }
+
   function openEmdEditor(tenderId, emdId) {
     state.editEmdId = emdId || null;
     state.emdTenderId = tenderId || null;
@@ -1357,16 +1569,20 @@
     if (!list.length) return WV.toast('Nothing to export with these filters.');
     var header = ['NIT no.', 'Title', 'Authority', 'City', 'Region', 'Team', 'Responsible',
       'Type', 'Estimated value', 'EMD', 'Tender fee', 'Published', 'Pre-bid', 'Submission',
-      'Opening', 'Stage', 'Go/No-Go', 'Result', 'Our rank', 'Quoted', 'Awarded value',
-      'Docs ready', 'Docs required', 'Remarks'];
+      'Opening', 'Stage', 'Go/No-Go', 'Submitted on', 'Result', 'Result date',
+      'Why not awarded', 'Loss notes', 'Our rank', 'Quoted', 'Awarded to', 'Awarded value',
+      'Corrigenda', 'Docs ready', 'Docs required', 'Remarks'];
     var rows = list.map(function (t) {
       var p = WVT.checklistProgress(t.id);
       return [t.nit_no || '', t.title, t.authority || '', t.city || '',
         WVT.regionName(t.region_id), WVT.teamName(t.team_id), WVT.personName(t.owner_id),
         t.tender_type || '', t.estimated_value || 0, t.emd_amount || 0, t.tender_fee || 0,
         t.published_date || '', t.pre_bid_date || '', t.submission_date || '', t.opening_date || '',
-        t.stage, t.go_no_go || '', t.result || 'Pending', t.our_rank || '',
-        t.quoted_value || '', t.awarded_value || '', p.done, p.total, t.remarks || ''];
+        t.stage, t.go_no_go || '', t.submitted_at ? String(t.submitted_at).slice(0, 10) : '',
+        t.result || 'Pending', t.result_date || '',
+        t.loss_reason || '', t.loss_reason_notes || '', t.our_rank || '',
+        t.quoted_value || '', t.awarded_to || '', t.awarded_value || '',
+        WVT.corrigendumCount(t.id), p.done, p.total, t.remarks || ''];
     });
     WV.downloadCsv('wevois-tenders-' + WV.todayInput() + '.csv', header, rows);
     WV.toast('Exported ' + rows.length + ' tenders');
@@ -1612,6 +1828,20 @@
         if (state.detailId) { state.detailTab = 'check'; renderDetail(); }
         return;
       }
+      if (e.target.id === 'corrAdd') {
+        if (state.detailId) openCorrEditor(state.detailId);
+        return;
+      }
+      if ((el = e.target.closest('[data-corrdel]'))) {
+        /* Removing a corrigendum does NOT roll the tender's dates back. The
+           dates on the portal are whatever the authority last said, and undoing
+           our record of the amendment does not undo the amendment. */
+        var dr2 = await WVT.deleteCorrigendum(el.getAttribute('data-corrdel'));
+        if (!dr2.ok) return WV.toast('Could not remove: ' + dr2.error);
+        WV.toast('Corrigendum removed — the tender dates were left as they are');
+        if (state.detailId) { state.detailTab = 'corr'; renderDetail(); }
+        return;
+      }
       if ((el = e.target.closest('[data-openfile]'))) {
         var url = await WVT.fileUrl(el.getAttribute('data-openfile'));
         if (!url) return WV.toast('Could not open that file.');
@@ -1736,6 +1966,15 @@
       setVal('rgName', ''); banner('rgBanner', ''); WV.openOverlay('regionOverlay');
     });
     on('rgSave', 'click', saveRegion);
+
+    /* --- corrigenda --- */
+    on('coSave', 'click', saveCorrigendum);
+
+    /* The tender form shows only what can mean something right now, so it has
+       to react as the stage and the submitted tick change. */
+    on('teStage', 'change', syncStatusFields);
+    on('teSubmitted', 'change', syncStatusFields);
+    on('teLossReason', 'change', syncStatusFields);
 
     /* --- misc --- */
     on('exportBtn', 'click', exportCsv);

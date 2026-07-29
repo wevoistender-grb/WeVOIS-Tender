@@ -11,32 +11,65 @@
      1. CONSTANTS
      ========================================================================== */
 
-  /* The pipeline a tender walks through. Order matters - it drives the funnel,
-     the "stage rank" comparisons and which actions are offered. */
+  /* The stages a tender can be in.
+   *
+   * FREE FLOATING - the order below is for reading and grouping only. It is
+   * NOT a sequence: any stage can be set at any time, a tender can go
+   * backwards, and nothing checks that it passed through anything first.
+   *
+   * So never write "has it got past X" by comparing positions in this array.
+   * Whether a bid was actually filed is submitted_at and nothing else - see
+   * WVT.isSubmitted below. That is why stageRank() no longer exists. */
   WVT.STAGES = [
     'Spotted',
     'Under Review',
+    'RFP',
+    'NIT',
     'Go / No-Go',
     'Documents',
+    'Proposal',
+    'PPT',
     'Ready',
     'Submitted',
     'Bid Opened',
+    'Awarded',
+    'Not Awarded',
     'Closed'
   ];
 
   WVT.STAGE_HELP = {
     'Spotted':      'Found on the portal, nothing checked yet',
     'Under Review': 'Reading the document, checking eligibility',
+    'RFP':          'Request for proposal in hand, being studied',
+    'NIT':          'Notice inviting tender published by the authority',
     'Go / No-Go':   'Decision pending on whether we bid',
     'Documents':    'Preparing the papers this tender demands',
+    'Proposal':     'Writing the technical and financial proposal',
+    'PPT':          'Presentation to the authority',
     'Ready':        'Everything attached, waiting to upload',
     'Submitted':    'Bid filed with the authority',
     'Bid Opened':   'Technical or financial bid opened',
-    'Closed':       'Result declared or tender dropped'
+    'Awarded':      'We won it',
+    'Not Awarded':  'We did not win it - record why',
+    'Closed':       'Dropped, cancelled or otherwise finished'
   };
 
-  WVT.OPEN_STAGES   = ['Spotted', 'Under Review', 'Go / No-Go', 'Documents', 'Ready'];
-  WVT.RESULTS       = ['Pending', 'Awarded', 'Lost', 'Cancelled'];
+  /* Stages that mean the tender is finished, however it ended. This replaces
+     the old OPEN_STAGES list, which assumed everything before 'Submitted' was
+     still in play - an assumption free-floating stages break. */
+  WVT.TERMINAL_STAGES = ['Awarded', 'Not Awarded', 'Closed'];
+
+  /* Picking one of these as the stage writes the matching result. The database
+     trigger tenders_sync_result does the same thing server-side, so it holds
+     even for a bulk update or a hand-written query. */
+  WVT.OUTCOME_STAGE_RESULT = { 'Awarded': 'Awarded', 'Not Awarded': 'Not Awarded' };
+
+  WVT.RESULTS       = ['Pending', 'Awarded', 'Not Awarded', 'Cancelled'];
+
+  /* Why a bid did not win. 'Other' is deliberately there: the day someone loses
+     for a reason not on this list you want it written in the notes, not forced
+     into the nearest wrong box where it quietly skews the reporting. */
+  WVT.LOSS_REASONS = ['Technical', 'Financial', 'Wrong documents uploaded', 'Other'];
   WVT.GO_OPTIONS    = ['Undecided', 'Go', 'No-Go'];
   WVT.TENDER_TYPES  = ['Service', 'Works', 'Supply', 'PPP', 'Other'];
 
@@ -71,9 +104,12 @@
   /* Sees every tender, whatever the team or region. */
   WVT.GLOBAL_ROLES = ['founder', 'tender_team'];
 
-  WVT.stageRank = function (s) {
+  /* Position in WVT.STAGES, for sorting and drawing only. Named to make misuse
+     obvious: it is a display order, not a progression. Anything asking "how far
+     has this got" is asking the wrong question now that stages float freely. */
+  WVT.stageOrder = function (s) {
     var i = WVT.STAGES.indexOf(s);
-    return i < 0 ? 0 : i;
+    return i < 0 ? WVT.STAGES.length : i;
   };
 
   /* ==========================================================================
@@ -82,7 +118,7 @@
 
   WVT.data = {
     teams: [], regions: [], tenders: [], emd: [], checklist: [],
-    companyDocs: [], rfps: [], events: [], comments: []
+    companyDocs: [], rfps: [], events: [], comments: [], corrigenda: []
   };
 
   WVT.me = null;      // the user_profiles row, with the tender columns
@@ -221,15 +257,23 @@
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
   };
 
-  /* A tender still in play - not submitted, not closed, not a No-Go. */
+  /* A tender still in play - the bid is not filed, it has not finished one way
+     or another, and we have not decided against bidding. Stated as three things
+     that are true rather than as a list of stages, so adding a stage later does
+     not silently change what "live" means. */
   WVT.isLive = function (t) {
     if (!t) return false;
     if (t.go_no_go === 'No-Go') return false;
-    return WVT.OPEN_STAGES.indexOf(t.stage) >= 0;
+    if (WVT.isSubmitted(t)) return false;
+    return WVT.TERMINAL_STAGES.indexOf(t.stage) < 0;
   };
 
+  /* The bid was filed. This is the ONLY signal for that, and it is a fact
+     somebody ticked with a date - never inferred from the stage, because
+     stages float freely and a tender can sit in 'PPT' long after it was
+     submitted, or be dragged back to 'Documents' by mistake. */
   WVT.isSubmitted = function (t) {
-    return !!t && (WVT.stageRank(t.stage) >= WVT.stageRank('Submitted'));
+    return !!t && !!t.submitted_at;
   };
 
   /* Deadline urgency, used for the row colour and the countdown chip. */
@@ -288,7 +332,8 @@
       safe(sb.from('tender_company_docs').select('*').eq('status', 'active').order('category').order('name'), []),
       safe(sb.from('tender_rfp_requests').select('*').order('requested_at', { ascending: false }), []),
       safe(sb.from('tender_comments').select('*').order('created_at', { ascending: false }), []),
-      safe(sb.from('user_profiles').select('id,full_name,email,role,tender_team_id,tender_role,tender_region_ids,tender_access,status').order('full_name'), [])
+      safe(sb.from('user_profiles').select('id,full_name,email,role,tender_team_id,tender_role,tender_region_ids,tender_access,status').order('full_name'), []),
+      safe(sb.from('tender_corrigenda').select('*').order('issued_date', { ascending: false, nullsFirst: false }), [])
     ]);
 
     WVT.data.teams       = res[0];
@@ -300,6 +345,7 @@
     WVT.data.rfps        = res[6];
     WVT.data.comments    = res[7];
     WVT.profiles         = res[8];
+    WVT.data.corrigenda  = res[9];
     return WVT.data;
   };
 
@@ -404,6 +450,97 @@
     if (r.error) return { ok: false, error: r.error.message };
     WVT.data.comments.unshift(r.data);
     return { ok: true, row: r.data };
+  };
+
+  /* ==========================================================================
+     CORRIGENDA
+
+     A corrigendum is an amendment the authority issues against a live tender.
+     It is not a stage: it can arrive at any point and the tender carries on
+     from wherever it was. What it usually does is move the dates - and because
+     the portal is updated at the same time, the tender's own dates have to
+     move with it or every countdown on the dashboard goes stale.
+
+     So saving one does two writes: the corrigendum row keeps what the dates
+     WERE (prev_*) alongside what they became (new_*), and the tender itself is
+     updated to the new ones. The history survives on the corrigendum.
+     ========================================================================== */
+
+  var CORR_DATE_FIELDS = [
+    { corr: 'pre_bid_date',    tender: 'pre_bid_date' },
+    { corr: 'query_last_date', tender: 'query_last_date' },
+    { corr: 'submission_date', tender: 'submission_date' },
+    { corr: 'opening_date',    tender: 'opening_date' }
+  ];
+
+  WVT.corrigendaFor = function (tenderId) {
+    var id = String(tenderId);
+    return WVT.data.corrigenda.filter(function (c) { return String(c.tender_id) === id; })
+      .sort(function (a, b) {
+        return String(b.issued_date || '').localeCompare(String(a.issued_date || ''));
+      });
+  };
+
+  WVT.corrigendumCount = function (tenderId) {
+    return WVT.corrigendaFor(tenderId).length;
+  };
+
+  /* body carries new_* dates only. prev_* are read off the tender here rather
+     than trusted from the caller, so the audit trail cannot be fabricated by a
+     stale form. Returns which tender dates actually moved. */
+  WVT.saveCorrigendum = async function (tenderId, body) {
+    var t = WVT.tenderById(tenderId);
+    if (!t) return { ok: false, error: 'That tender is no longer loaded. Refresh and try again.' };
+
+    var row = {
+      tender_id: String(tenderId),
+      corrigendum_no: body.corrigendum_no || null,
+      issued_date: body.issued_date || null,
+      summary: body.summary || null,
+      portal_updated: !!body.portal_updated,
+      doc_url: body.doc_url || null,
+      created_by: String(WV.currentUser.id)
+    };
+
+    var tenderPatch = {};
+    var moved = [];
+    CORR_DATE_FIELDS.forEach(function (f) {
+      var next = body['new_' + f.corr] || null;
+      row['new_' + f.corr]  = next;
+      row['prev_' + f.corr] = t[f.tender] || null;
+      /* Only touch the tender when the corrigendum actually carries a
+         different date. A blank field means "this one did not change". */
+      if (next && next !== (t[f.tender] || null)) {
+        tenderPatch[f.tender] = next;
+        moved.push({ field: f.tender, from: t[f.tender] || null, to: next });
+      }
+    });
+
+    var r = await WV.sb.from('tender_corrigenda').insert(row).select().maybeSingle();
+    if (r.error) return { ok: false, error: r.error.message };
+    WVT.data.corrigenda.unshift(r.data);
+
+    /* The tender update is second on purpose: if it fails the corrigendum is
+       still on record, which is the half worth keeping. */
+    if (Object.keys(tenderPatch).length) {
+      var u = await WV.sb.from('tenders').update(tenderPatch)
+        .eq('id', String(tenderId)).select().maybeSingle();
+      if (u.error) {
+        return { ok: true, row: r.data, moved: [], error: u.error.message, datesFailed: true };
+      }
+      if (u.data) {
+        var i = WVT.data.tenders.findIndex(function (x) { return String(x.id) === String(tenderId); });
+        if (i >= 0) WVT.data.tenders[i] = u.data;
+      }
+    }
+    return { ok: true, row: r.data, moved: moved };
+  };
+
+  WVT.deleteCorrigendum = async function (id) {
+    var r = await WV.sb.from('tender_corrigenda').delete().eq('id', String(id));
+    if (r.error) return { ok: false, error: r.error.message };
+    WVT.data.corrigenda = WVT.data.corrigenda.filter(function (c) { return String(c.id) !== String(id); });
+    return { ok: true };
   };
 
   /* Give a brand-new tender the standard document checklist so nobody has to
@@ -700,7 +837,7 @@
       if (WVT.isLive(x)) t.live++;
       if (WVT.isSubmitted(x)) t.submitted++;
       if (x.result === 'Awarded') { t.awarded++; t.wonValue += Number(x.awarded_value || x.quoted_value || 0); }
-      if (x.result === 'Lost') t.lost++;
+      if (x.result === 'Not Awarded') t.lost++;
       t.value += Number(x.estimated_value || 0);
       var d = WVT.deadlineState(x);
       if (d.cls === 'bad' && !WVT.isSubmitted(x)) {
@@ -798,14 +935,15 @@
   WVT.stageBadge = function (stage) {
     var s = stage || 'Spotted';
     var cls = 'b-open';
-    if (s === 'Submitted' || s === 'Bid Opened') cls = 'b-paid';
+    if (s === 'Submitted' || s === 'Bid Opened' || s === 'Awarded') cls = 'b-paid';
+    if (s === 'Not Awarded') cls = 'b-hold';
     if (s === 'Closed') cls = 'b-none';
     return '<span class="badge ' + cls + '">' + WV.esc(s) + '</span>';
   };
 
   WVT.resultBadge = function (result) {
     var r = result || 'Pending';
-    var cls = r === 'Awarded' ? 'b-paid' : (r === 'Lost' || r === 'Cancelled') ? 'b-hold' : 'b-none';
+    var cls = r === 'Awarded' ? 'b-paid' : (r === 'Not Awarded' || r === 'Cancelled') ? 'b-hold' : 'b-none';
     return '<span class="badge ' + cls + '">' + WV.esc(r) + '</span>';
   };
 
