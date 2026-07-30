@@ -3,7 +3,7 @@
 --
 --  Run this on a database that already has TENDER-SETUP.sql in it.
 --  It is idempotent: run it as many times as you like. If you already ran an
---  earlier copy of this file, run it again - sections 7 and 9 to 13 are new.
+--  earlier copy of this file, run it again - sections 7 and 9 to 17 are new.
 --
 --  Paste the WHOLE file into the Supabase SQL editor and select all of it
 --  (Ctrl+A) before pressing Run. The editor executes only the selection, and
@@ -416,7 +416,7 @@ returns boolean language sql security definer stable set search_path = public as
      where p.id = auth.uid()::text
        and coalesce(p.status,'active') <> 'inactive'
        and coalesce(p.tender_access, false)
-       and p.tender_role in ('vp','avp','dgm','founder')
+       and p.tender_role in ('ceo','vp','avp','dgm','founder')
   );
 $$;
 
@@ -429,7 +429,7 @@ returns boolean language sql security definer stable set search_path = public as
      where p.id = auth.uid()::text
        and coalesce(p.status,'active') <> 'inactive'
        and ( p.role = 'admin'
-             or ( coalesce(p.tender_access, false) and p.tender_role in ('vp','founder') ) )
+             or ( coalesce(p.tender_access, false) and p.tender_role in ('ceo','vp','founder') ) )
   );
 $$;
 
@@ -856,9 +856,309 @@ drop trigger if exists rfp_stamp on public.tender_rfp_requests;
 create trigger rfp_stamp before insert or update on public.tender_rfp_requests
   for each row execute function public.wv_rfp_stamp();
 
+-- ---------------------------------------------------------------------------
+--  14. THE DOCUMENT VAULT: PRIVATE, AND NOT PRE-NAMED
+--
+--  Two changes.
+--
+--  a) Who sees it. The vault holds the company's registration certificates,
+--     PF and ESI numbers, balance sheets, experience certificates - the papers
+--     a bid is built from. It was readable by everyone with tender access.
+--     From now: the tender team, the VP and the Founder. AVP, DGM and BD do
+--     not see the tab at all.
+--
+--  b) The 23 pre-named rows go. Guessing at a company's document list produces
+--     names nobody uses and a list people work around rather than with. The
+--     tender team types the name they actually call it and attaches the paper.
+--
+--     Fresh installs seed nothing. On an existing database only the UNTOUCHED
+--     seeds are removed - anything with a file, a link, a document number or an
+--     expiry date on it has been used by a person, and deleting that would be
+--     throwing away their work.
+--
+--  A Drive link is added alongside the upload, the same as the RFP copy. An
+--  uploaded file is covered by the storage rules; a link is not, because
+--  whoever holds a link can open it.
+-- ---------------------------------------------------------------------------
+
+alter table public.tender_company_docs add column if not exists file_url text;
+
+comment on column public.tender_company_docs.file_url is
+  'Link to a copy held elsewhere (Drive). Not access-controlled - whoever has the link can open it. Prefer file_path for anything sensitive.';
+
+
+-- Remove the pristine seeds. Deliberately narrow: name still one of the seeded
+-- 23, nothing attached, no link, no number, no dates, no notes of their own.
+delete from public.tender_company_docs d
+ where d.file_path is null
+   and d.file_url  is null
+   and d.doc_no    is null
+   and d.issue_date  is null
+   and d.expiry_date is null
+   and coalesce(d.version, 1) = 1
+   and d.name in (
+     'PAN Card','GST Registration Certificate','EPF Registration Certificate',
+     'ESIC Registration Certificate','Labour Licence','Certificate of Incorporation',
+     'Memorandum of Association','Articles of Association','Partnership Deed',
+     'Shop and Establishment Certificate','Udyam / MSME Certificate',
+     'Trade Licence','Balance Sheet','Profit and Loss Statement',
+     'Income Tax Return','Turnover Certificate','Solvency Certificate',
+     'Bank Statement','Work Order','Completion Certificate',
+     'Experience Certificate','Performance Certificate','ISO Certificate'
+   );
+
+
+-- --- who may see it ----------------------------------------------------------
+create or replace function public.wv_can_see_docs()
+returns boolean language sql security definer stable set search_path = public as $$
+  select exists (
+    select 1 from public.user_profiles p
+     where p.id = auth.uid()::text
+       and coalesce(p.status,'active') <> 'inactive'
+       and ( p.role = 'admin'
+             or ( coalesce(p.tender_access, false)
+                  and p.tender_role in ('tender_team','ceo','vp','founder') ) )
+  );
+$$;
+
+drop policy if exists tcdocs_read  on public.tender_company_docs;
+drop policy if exists tcdocs_write on public.tender_company_docs;
+
+create policy tcdocs_read on public.tender_company_docs for select to authenticated
+  using (public.wv_can_see_docs());
+
+-- Maintaining it stays with the tender team: they are the ones who know which
+-- certificate is current and when it expires.
+create policy tcdocs_write on public.tender_company_docs for all to authenticated
+  using (public.wv_is_tender_team()) with check (public.wv_is_tender_team());
+
+
+-- The vault's own files follow the vault. Without this the papers would still
+-- be readable by anyone with tender access even though the list is not.
+drop policy if exists tender_files_read   on storage.objects;
+drop policy if exists tender_files_upload on storage.objects;
+drop policy if exists tender_files_update on storage.objects;
+
+create policy tender_files_read on storage.objects for select to authenticated
+  using (
+    bucket_id = 'tenders'
+    and public.wv_has_tender_access()
+    and (name not like 'company/%' or public.wv_can_see_docs())
+    and (
+      name not like 'rfp/%'
+      or exists (select 1 from public.tender_rfp_requests r
+                  where r.id = split_part(name, '/', 2))
+    )
+  );
+
+create policy tender_files_upload on storage.objects for insert to authenticated
+  with check (
+    bucket_id = 'tenders'
+    and public.wv_has_tender_access()
+    and (name not like 'company/%' or public.wv_is_tender_team())
+    and (
+      name not like 'rfp/%'
+      or exists (select 1 from public.tender_rfp_requests r
+                  where r.id = split_part(name, '/', 2))
+    )
+  );
+
+create policy tender_files_update on storage.objects for update to authenticated
+  using (
+    bucket_id = 'tenders'
+    and public.wv_has_tender_access()
+    and (name not like 'company/%' or public.wv_is_tender_team())
+    and (
+      name not like 'rfp/%'
+      or exists (select 1 from public.tender_rfp_requests r
+                  where r.id = split_part(name, '/', 2))
+    )
+  );
+
+-- ---------------------------------------------------------------------------
+--  15. THE ASSIGNMENT LINE READS AS A NAME
+--
+--  wv_rfp_log() wrote 'Assigned to ' || new.assigned_to - the raw uuid. The
+--  timeline then read:
+--
+--      Assigned to a8d5640d-f389-42fe-8bf7-c59d182c5a69
+--
+--  which tells a human nothing. It now looks the name up.
+--
+--  The function is already SECURITY DEFINER, so the lookup does not depend on
+--  the caller being able to read that profile row. Falls back to the id, then
+--  to 'nobody', so an assignment is never lost just because a name is missing.
+-- ---------------------------------------------------------------------------
+create or replace function public.wv_rfp_log()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  v_name  text;
+  v_email text;
+  v_to    text;
+begin
+  select coalesce(full_name, email), email into v_name, v_email
+    from public.user_profiles where id = auth.uid()::text;
+
+  if tg_op = 'INSERT' then
+    insert into public.tender_rfp_events
+      (request_id, event, to_status, note, actor_id, actor_name, actor_email)
+    values (new.id, 'status', new.status, 'Request raised',
+            auth.uid()::text, v_name, v_email);
+    return new;
+  end if;
+
+  if new.status is distinct from old.status then
+    insert into public.tender_rfp_events
+      (request_id, event, from_status, to_status, file_path, version,
+       actor_id, actor_name, actor_email)
+    values (new.id, 'status', old.status, new.status, new.file_path,
+            new.current_version, auth.uid()::text, v_name, v_email);
+  end if;
+
+  if new.assigned_to is distinct from old.assigned_to then
+    select coalesce(full_name, email) into v_to
+      from public.user_profiles where id = new.assigned_to;
+
+    insert into public.tender_rfp_events
+      (request_id, event, note, actor_id, actor_name, actor_email)
+    values (new.id, 'assign',
+            'Assigned to ' || coalesce(v_to, new.assigned_to, 'nobody'),
+            auth.uid()::text, v_name, v_email);
+  end if;
+
+  if new.current_version is distinct from old.current_version then
+    insert into public.tender_rfp_events
+      (request_id, event, note, file_path, version,
+       actor_id, actor_name, actor_email)
+    values (new.id, 'file', 'Version ' || new.current_version || ' uploaded',
+            new.file_path, new.current_version,
+            auth.uid()::text, v_name, v_email);
+  end if;
+
+  return new;
+end $$;
+
+-- Rewrite the ones already written as raw ids, so the history reads properly
+-- too rather than only new entries.
+update public.tender_rfp_events e
+   set note = 'Assigned to ' || coalesce(p.full_name, p.email)
+  from public.user_profiles p
+ where e.event = 'assign'
+   and e.note = 'Assigned to ' || p.id;
+
+-- ---------------------------------------------------------------------------
+--  16. LIVE UPDATES
+--
+--  The portal loaded once at sign-in and never looked again. Two people working
+--  the same tender saw different things until somebody pressed reload - and on
+--  a system where a VP is waiting on a decision queue and a deadline countdown
+--  is the point, stale is worse than slow.
+--
+--  Supabase streams row changes over its realtime channel, but only for tables
+--  in the supabase_realtime publication. Adding a table there does NOT bypass
+--  row level security: the stream is filtered per subscriber by the same
+--  policies as a select, so an AVP is not told about an RFP request they cannot
+--  read.
+--
+--  Deliberately NOT published: nothing here is secret enough to matter, but
+--  activity_logs would fire on every action and cause a reload storm.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  t text;
+begin
+  if not exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    create publication supabase_realtime;
+  end if;
+
+  foreach t in array array[
+    'tenders', 'tender_emd', 'tender_checklist', 'tender_corrigenda',
+    'tender_bids', 'tender_firms', 'tender_rfp_requests', 'tender_rfp_events',
+    'tender_comments', 'tender_company_docs', 'notifications',
+    'user_profiles', 'tender_teams', 'tender_regions'
+  ] loop
+    if to_regclass('public.' || t) is not null
+       and not exists (select 1 from pg_publication_tables
+                        where pubname = 'supabase_realtime'
+                          and schemaname = 'public' and tablename = t) then
+      execute format('alter publication supabase_realtime add table public.%I', t);
+    end if;
+  end loop;
+end $$;
+
+-- ---------------------------------------------------------------------------
+--  17. A REQUEST THAT IS NOT ABOUT A TENDER
+--
+--  Not everything asked for is tied to a bid - a capability deck, a profile for
+--  a client meeting, a write-up for a scheme that has not been floated yet.
+--  Those had nowhere to say what they were about: tender_id was null and the
+--  only context was whatever the title happened to say.
+--
+--  So: a free-text topic. The interface requires one when no tender is picked,
+--  because a request attached to nothing is the thing that makes a queue
+--  useless to the person working it.
+-- ---------------------------------------------------------------------------
+alter table public.tender_rfp_requests add column if not exists topic text;
+
+comment on column public.tender_rfp_requests.topic is
+  'What this is about when it is not tied to a tender - a project, a scheme, a client. One of tender_id or topic should always be set.';
+
+-- ---------------------------------------------------------------------------
+--  18. THE CEO
+--
+--  A job role that did not exist here before. The rule the business gave:
+--  the CEO sees everything and decides alongside the VP.
+--
+--  Two halves, and they are separate columns:
+--
+--    SEEING - the CEO is a global role, like the Founder and the Tender Team.
+--    Every tender, whatever unit or region owns it. Deliberately WIDER than the
+--    VP, who only sees their own unit and what sits under it: a tender parked
+--    in the Founder's unit is invisible to the VP, and it should not be
+--    invisible to the CEO.
+--
+--    DECIDING - Go / No-Go on a tender, and handing a document request to a
+--    person. Identical to the VP. The AVP and the DGM still watch and decide
+--    nothing; that is unchanged.
+--
+--  What the CEO still cannot do: edit a tender. That stays with the tender
+--  executives, exactly as it does for the VP and the Founder. Nor record an
+--  EMD payment - that is the tender team alone.
+--
+--  The three functions that carry those powers were replaced above, in the
+--  sections they belong to. This section adds what is specific to the CEO: the
+--  global-visibility list, and an org unit to put the person in.
+-- ---------------------------------------------------------------------------
+
+-- Sees every tender, whatever the unit or the region.
+create or replace function public.wv_tender_is_global()
+returns boolean language sql security definer stable set search_path = public as $$
+  select exists (
+    select 1
+      from public.user_profiles p
+      left join public.tender_teams t on t.id = p.tender_team_id
+     where p.id = auth.uid()::text
+       and coalesce(p.status,'active') <> 'inactive'
+       and ( p.role = 'admin'
+             or p.tender_role in ('founder','ceo','tender_team')
+             or t.scope = 'global' )
+  );
+$$;
+
+comment on column public.user_profiles.tender_role is
+  'founder | ceo | vp | avp | dgm | bd | tender_team | member';
+
+-- A unit to put the person in. Global scope, so it does not matter where in
+-- the tree it sits - but it is placed under the Founder so the tree reads
+-- correctly. Move the VP underneath it from Team & access if you want the
+-- reporting line drawn that way; nothing about who sees what depends on it.
+insert into public.tender_teams (id, name, parent_id, scope, can_upload, sort)
+values ('ceo', 'CEO', 'founder', 'global', true, 15)
+on conflict (id) do nothing;
+
 -- ===========================================================================
---  14. VERIFICATION
---  Expect:  2 - 1 - true - true - 0 - 4 - true - 2 - 1 - true - true - true - 5 - true - 2 - 1
+--  19. VERIFICATION
+--  Expect:  2 - 1 - true - true - 0 - 4 - true - 2 - 1 - true - true - true - 5 - true - 2 - 1 - true - 14 - 1 - 1 - true - true
 --  new tender columns, the corrigenda table, RLS on it, the result trigger,
 --  "no tender still carries the old 'Lost' result", the four EMD policies,
 --  the EMD permission function, the two new tables, the firm_id on EMD, and
@@ -915,4 +1215,22 @@ select
   ) as rfp_link_columns,
   (select count(*) from information_schema.columns
     where table_schema='public' and table_name='tender_rfp_requests' and column_name='held_at'
-  ) as hold_column;
+  ) as hold_column,
+  (select count(*) > 0 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname='public' and p.proname='wv_can_see_docs'
+  ) as docs_guard,
+  (select count(*) from pg_publication_tables
+    where pubname='supabase_realtime' and schemaname='public'
+  ) as live_tables,
+  (select count(*) from information_schema.columns
+    where table_schema='public' and table_name='tender_rfp_requests' and column_name='topic'
+  ) as topic_column,
+  (select count(*) from public.tender_teams where id='ceo') as ceo_unit,
+  (select pg_get_functiondef(p.oid) like '%''ceo''%'
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname='public' and p.proname='wv_can_assign_rfp'
+  ) as ceo_decides,
+  (select pg_get_functiondef(p.oid) like '%''ceo''%'
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname='public' and p.proname='wv_tender_is_global'
+  ) as ceo_sees_all;

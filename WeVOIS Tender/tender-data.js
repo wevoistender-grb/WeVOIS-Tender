@@ -98,9 +98,10 @@
   /* The window the leadership "what is coming up" list watches. */
   WVT.UPCOMING_DAYS = 15;
 
-  WVT.TENDER_ROLES = ['founder', 'vp', 'avp', 'dgm', 'bd', 'tender_team', 'member'];
+  WVT.TENDER_ROLES = ['founder', 'ceo', 'vp', 'avp', 'dgm', 'bd', 'tender_team', 'member'];
   WVT.ROLE_LABEL = {
     founder:     'Founder',
+    ceo:         'CEO',
     vp:          'VP',
     avp:         'AVP',
     dgm:         'DGM',
@@ -108,8 +109,11 @@
     tender_team: 'Tender Team',
     member:      'Team member'
   };
-  /* Sees every tender, whatever the team or region. */
-  WVT.GLOBAL_ROLES = ['founder', 'tender_team'];
+  /* Sees every tender, whatever the team or region.
+     The CEO is here and the VP is not, on purpose: the VP sees their own unit
+     and what sits under it, so a tender parked in the Founder's unit is
+     invisible to them. It should not be invisible to the CEO. */
+  WVT.GLOBAL_ROLES = ['founder', 'ceo', 'tender_team'];
 
   /* Position in WVT.STAGES, for sorting and drawing only. Named to make misuse
      obvious: it is a display order, not a progression. Anything asking "how far
@@ -235,12 +239,12 @@
   WVT.isLeadership = function () {
     var me = WVT.me;
     return !!(me && me.tender_access &&
-      ['vp', 'avp', 'dgm', 'founder'].indexOf(me.tender_role) >= 0);
+      ['ceo', 'vp', 'avp', 'dgm', 'founder'].indexOf(me.tender_role) >= 0);
   };
 
-  /* Who answers a Go / No-Go request. The VP and the Founder, and nobody else:
-     AVP and DGM watch, and the tender executives raise the request rather than
-     answering it. Mirrors wv_can_approve_tender() in the database. */
+  /* Who answers a Go / No-Go request. The CEO, the VP and the Founder, and
+     nobody else: AVP and DGM watch, and the tender executives raise the request
+     rather than answering it. Mirrors wv_can_approve_tender() in the database. */
   WVT.canDecide = function (t) {
     return !!t && WVT.canApprove() && WVT.canSee(t.team_id, t.region_id);
   };
@@ -260,6 +264,21 @@
   /* The gate. Nothing is filed and no money moves until the answer is Go. */
   WVT.isApproved = function (t) { return !!t && t.go_no_go === 'Go'; };
 
+  /* The document vault holds the company's registrations, financials and
+     experience certificates - the papers a bid is built from. Narrower than
+     "has tender access": the tender team, the CEO, the VP and the Founder.
+     AVP, DGM and BD do not see the tab at all. Mirrors wv_can_see_docs(). */
+  WVT.canSeeDocs = function () {
+    if (WVT.isAdmin()) return true;
+    var me = WVT.me;
+    return !!(me && me.tender_access &&
+      ['tender_team', 'ceo', 'vp', 'founder'].indexOf(me.tender_role) >= 0);
+  };
+
+  /* Maintaining it stays with the tender team: they know which certificate is
+     current and when it expires. */
+  WVT.canEditDocs = function () { return WVT.isTenderTeam(); };
+
   /* Who an RFP request can be given to.
    *
    * ANYONE with tender access, whatever team they sit in - BD, the VP's own
@@ -272,12 +291,12 @@
     });
   };
 
-  /* Who hands an RFP request to a person. The business put this with the VP
-     and the Founder specifically, not with all of leadership. */
+  /* Who hands a document request to a person. The business put this with the
+     CEO, the VP and the Founder specifically, not with all of leadership. */
   WVT.canAssignRfp = function () {
     if (WVT.isAdmin()) return true;
     var me = WVT.me;
-    return !!(me && me.tender_access && ['vp', 'founder'].indexOf(me.tender_role) >= 0);
+    return !!(me && me.tender_access && ['ceo', 'vp', 'founder'].indexOf(me.tender_role) >= 0);
   };
   WVT.canDelete = function ()  { return WVT.isAdmin() || WVT.isGlobal(); };
   WVT.canUpload = function () {
@@ -889,6 +908,97 @@
     });
 
     return { ok: true, row: u.data, version: body.current_version };
+  };
+
+  /* ==========================================================================
+     LIVE UPDATES
+
+     The portal used to load once at sign-in and never look again, so two people
+     on the same tender saw different things until somebody pressed reload. On a
+     system built around a decision queue and a deadline countdown, stale is
+     worse than slow.
+
+     Three layers, because any one of them can fail quietly:
+
+       1. Realtime  - Supabase streams row changes. Instant, but needs the
+                      tables in the supabase_realtime publication and a working
+                      websocket, and corporate networks do block those.
+       2. On return - refresh when the tab is looked at again. Catches anything
+                      realtime missed while the laptop was shut.
+       3. Slow poll - every 90 seconds, and only while the tab is actually
+                      visible. The backstop for when realtime never connected
+                      at all; harmless when it did.
+
+     Row level security still applies to the stream: a subscriber is only told
+     about rows they could have selected, so an AVP is not notified about an RFP
+     request they cannot read.
+     ========================================================================== */
+
+  WVT.live = { status: 'off', channel: null, timer: null };
+
+  /* Changes arrive in bursts - one save can touch a tender, a bid and an event.
+     Collapse them so a burst causes one reload, not five. */
+  function debounce(fn, ms) {
+    var t = null;
+    return function () {
+      clearTimeout(t);
+      t = setTimeout(fn, ms);
+    };
+  }
+
+  /* onChange is called when something, somewhere, changed. It is deliberately
+     not told WHAT changed: the caller reloads and re-renders, which is cheap
+     here and cannot drift out of step with the tables the way a hand-written
+     per-table patch would. */
+  WVT.startLive = function (onChange) {
+    var fire = debounce(onChange, 400);
+
+    /* --- 1. realtime --- */
+    try {
+      /* supabase-js needs the access token on the realtime socket for RLS to be
+         applied to the stream. Without it the server refuses postgres_changes
+         on an RLS-protected table and the subscription simply never fires. */
+      if (WV.sb.realtime && WV.sb.realtime.setAuth) {
+        WV.sb.auth.getSession().then(function (r) {
+          var tok = r && r.data && r.data.session && r.data.session.access_token;
+          if (tok) { try { WV.sb.realtime.setAuth(tok); } catch (e) {} }
+        });
+      }
+
+      WVT.live.channel = WV.sb.channel('wvt-live')
+        .on('postgres_changes', { event: '*', schema: 'public' }, function () {
+          WVT.live.status = 'live';
+          fire();
+        })
+        .subscribe(function (status) {
+          if (status === 'SUBSCRIBED')  WVT.live.status = 'live';
+          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') WVT.live.status = 'polling';
+          if (status === 'CLOSED') WVT.live.status = 'polling';
+          if (typeof WVT.onLiveStatus === 'function') WVT.onLiveStatus(WVT.live.status);
+        });
+    } catch (e) {
+      WVT.live.status = 'polling';
+      console.warn('[tender] realtime unavailable, falling back to polling', e);
+    }
+
+    /* --- 2. when the tab is looked at again --- */
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) fire();
+    });
+    global.addEventListener('focus', fire);
+
+    /* --- 3. the slow backstop --- */
+    clearInterval(WVT.live.timer);
+    WVT.live.timer = setInterval(function () {
+      if (!document.hidden) fire();
+    }, 90000);
+  };
+
+  WVT.stopLive = function () {
+    try { if (WVT.live.channel) WV.sb.removeChannel(WVT.live.channel); } catch (e) {}
+    clearInterval(WVT.live.timer);
+    WVT.live.channel = null;
+    WVT.live.status = 'off';
   };
 
   /* ==========================================================================

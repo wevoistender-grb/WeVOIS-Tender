@@ -221,7 +221,7 @@
     /* Top-of-page alert */
     var bits = [];
     if (s.overdue) bits.push(s.overdue + ' tender' + (s.overdue === 1 ? '' : 's') + ' past the submission date and not submitted');
-    if (rs.late)   bits.push(rs.late + ' RFP request' + (rs.late === 1 ? '' : 's') + ' past the needed-by date');
+    if (rs.late)   bits.push(rs.late + ' document request' + (rs.late === 1 ? '' : 's') + ' past the needed-by date');
     var expired = exp.filter(function (d) { return (WVT.daysTo(d.expiry_date) || 0) < 0; }).length;
     if (expired)   bits.push(expired + ' company document' + (expired === 1 ? '' : 's') + ' already expired');
     if (bits.length) {
@@ -428,7 +428,9 @@
     syncStatusFields();
 
     $('teSeedN').textContent = String(WVT.data.companyDocs.length);
-    show('teSeedWrap', !t);
+    /* Nothing in the vault means nothing to seed - offering the tick would be
+       offering to add zero items. */
+    show('teSeedWrap', !t && WVT.data.companyDocs.length > 0);
     setChk('teSeed', true);
     show('teDelete', !!t && WVT.canDelete());
     $('teTitle').textContent = t ? 'Edit tender' : 'New tender';
@@ -450,7 +452,7 @@
     if (tick) tick.disabled = !approved;
     $('teSubHint').textContent = approved
       ? 'Ticking this is what opens the EMD, rank and result fields, and stops the deadline countdown.'
-      : 'Locked until the VP or Founder records a Go. Nothing is filed on a tender nobody approved.';
+      : 'Locked until the CEO, VP or Founder records a Go. Nothing is filed on a tender nobody approved.';
 
     var stage = val('teStage');
     var filed = $('teSubmitted') && $('teSubmitted').checked;
@@ -570,7 +572,7 @@
     var existing = state.editId ? WVT.tenderById(state.editId) : null;
     if (filed && !(existing && existing.go_no_go === 'Go')) {
       return banner('teBanner',
-        'This tender has no Go decision yet. The VP or Founder has to approve it before it can be marked submitted.', 'bad');
+        'This tender has no Go decision yet. The CEO, VP or Founder has to approve it before it can be marked submitted.', 'bad');
     }
     if (filed) {
       var on = dateOrNull('teSubmittedOn');
@@ -792,7 +794,9 @@
             '<td>' + esc(WVT.fmtDate(c.due_date)) + '</td>' +
             '<td>' + (editable ? '<button class="btn sm danger" data-chkdel="' + esc(c.id) + '">Remove</button>' : '') + '</td></tr>';
         }).join('') + '</tbody></table></div>'
-      : empty('No checklist yet. Use “Add standard list” to load the usual documents.');
+      : empty(WVT.data.companyDocs.length
+          ? 'No checklist yet. Use “Add standard list” to load the documents from the vault.'
+          : 'No checklist yet. Add the items this tender demands, or fill the document vault first and load them from there.');
 
     $('dCheck').innerHTML = head + body;
   }
@@ -887,7 +891,7 @@
 
     $('rfpList').innerHTML = rows.length
       ? '<div class="tbl-wrap"><table><thead><tr>' +
-        '<th>What</th><th>Tender</th><th>Raised by</th><th>With</th><th>Needed</th><th>Status</th><th>Age</th>' +
+        '<th>What</th><th>About</th><th>Raised by</th><th>With</th><th>Needed</th><th>Status</th><th>Age</th>' +
         '</tr></thead><tbody>' + rows.map(function (r) {
           var age = Math.max(0, Math.round((Date.now() - Date.parse(r.requested_at)) / 86400000));
           var t = r.tender_id ? WVT.tenderById(r.tender_id) : null;
@@ -895,7 +899,8 @@
             '<td><div style="font-weight:650">' + esc(r.title) + '</div>' +
               '<div class="muted" style="font-size:11px">' + esc(r.doc_type || '—') +
               ' · ' + esc(r.priority || 'Normal') + '</div></td>' +
-            '<td>' + esc(t ? t.title : 'Not linked') + '</td>' +
+            '<td>' + esc(t ? t.title : (r.topic || 'Not linked')) +
+              (t && r.topic ? '<div class="muted" style="font-size:11px">' + esc(r.topic) + '</div>' : '') + '</td>' +
             '<td>' + esc(WVT.personName(r.requested_by)) + '</td>' +
             '<td>' + esc(r.assigned_to ? WVT.personName(r.assigned_to) : '—') + '</td>' +
             '<td>' + esc(WVT.fmtDate(r.needed_by)) +
@@ -924,14 +929,32 @@
           (p.tender_role ? ' — ' + (WVT.ROLE_LABEL[p.tender_role] || p.tender_role) : '') };
       }),
       '', 'Decide later');
-    setVal('reTitleIn', ''); setVal('reDesc', ''); setVal('reNeed', '');
+    setVal('reTitleIn', ''); setVal('reDesc', ''); setVal('reNeed', ''); setVal('reTopic', '');
+    syncRequestTopic();
     banner('reBanner', '');
     WV.openOverlay('rfpOverlay');
+  }
+
+  /* A request has to be about something. Either it hangs off a tender, or the
+     person says what it IS about - never neither, because a request attached to
+     nothing is one nobody can act on. */
+  function syncRequestTopic() {
+    var hasTender = !!val('reTender');
+    $('reTopicHint').textContent = hasTender
+      ? 'Optional — add a phase or a client if the tender title does not say enough'
+      : 'Required when it is not tied to a tender — a project, a scheme, a client';
+    var lab = $('reTopicWrap').querySelector('label');
+    if (lab) lab.textContent = hasTender ? 'What is it about?' : 'What is it about? *';
   }
 
   async function saveRfp() {
     var title = val('reTitleIn');
     if (!title) return banner('reBanner', 'Say what you need.', 'bad');
+    /* Tied to a tender, or named as a topic - one or the other. A request
+       attached to nothing is one nobody can act on. */
+    if (!val('reTender') && !val('reTopic')) {
+      return banner('reBanner', 'Say what it is about — pick the tender, or name the project it belongs to.', 'bad');
+    }
     var body = {
       tender_id: val('reTender') || null,
       title: title,
@@ -941,6 +964,7 @@
       needed_by: dateOrNull('reNeed'),
       requested_by: String(WV.currentUser.id),
       requested_by_team: (WVT.me && WVT.me.tender_team_id) || null,
+      topic: val('reTopic') || null,
       status: 'Requested'
     };
     /* Set the key at all only when we are allowed to. JSON.stringify would drop
@@ -952,13 +976,13 @@
     $('reSave').disabled = false;
     if (!r.ok) return banner('reBanner', 'Could not send: ' + r.error, 'bad');
 
-    await WV.addNotification('RFP requested: ' + title,
+    await WV.addNotification('document requested: ' + title,
       (WV.currentUser.full_name || WV.currentUser.email) + ' needs this by ' + WVT.fmtDate(body.needed_by),
       'info', 'all');
-    await WV.logActivity('RFP requested', title, r.row && r.row.id);
+    await WV.logActivity('document requested', title, r.row && r.row.id);
     var stacked = detailOpen();
     if (stacked) closeTop('rfpOverlay'); else WV.closeOverlays();
-    WV.toast('Request sent to the tender team');
+    WV.toast('Request sent — the CEO, VP or Founder will assign it');
     await refresh();
     if (stacked) { state.detailTab = 'rfp'; renderDetail(); }
   }
@@ -973,7 +997,9 @@
 
     $('rdTitle').textContent = r.title;
     var t = r.tender_id ? WVT.tenderById(r.tender_id) : null;
-    $('rdSub').textContent = (t ? t.title + ' · ' : '') + (r.doc_type || 'Document') + ' · ' + (r.priority || 'Normal');
+    /* A request not tied to a tender still has to say what it is about. */
+    $('rdSub').textContent = (t ? t.title : (r.topic || 'No tender')) + ' · ' +
+      (r.doc_type || 'Document') + ' · ' + (r.priority || 'Normal');
     $('rdBody').innerHTML = '<div class="muted">Loading the timeline…</div>';
     WV.openOverlay('rfpDetailOverlay');
 
@@ -993,8 +1019,14 @@
 
     var actions = [];
 
-    /* The VP's side of it: answer the request, then give it to someone. */
-    if (canDecideRfp) {
+    /* The VP's side of it: answer the request, then give it to someone.
+     *
+     * Accept / hold / reject disappear for EVERYONE the moment it is assigned.
+     * Handing the work to a person is the answer - re-answering it afterwards
+     * would leave somebody working on a request that had since been rejected.
+     * From then on the only move is to hand it to somebody else. */
+    var answered = !!r.assigned_to;
+    if (canDecideRfp && !answered) {
       if (r.status === 'Requested') {
         actions.push(['Accepted', 'Accept'], ['On Hold', 'Put on hold'], ['Rejected', 'Reject']);
       }
@@ -1051,7 +1083,7 @@
     /* Handing it over. Offered from the moment it is accepted, and still
        offered afterwards so a request can be moved to somebody else. */
     var assignBox = '';
-    if (canDecideRfp && ['Accepted', 'In Preparation', 'Changes Requested', 'On Hold'].indexOf(r.status) >= 0) {
+    if (canDecideRfp && ['Closed', 'Rejected'].indexOf(r.status) < 0) {
       var people = WVT.assignableProfiles();
       assignBox =
         '<div class="sec-title">' + (r.assigned_to ? 'Hand it to someone else' : 'Give it to someone') + '</div>' +
@@ -1070,6 +1102,18 @@
         '<div class="banner" id="rdAssignBanner" style="display:none"></div>';
     }
 
+    /* The database used to write 'Assigned to <uuid>' into the note. Fixed at
+       source, and rewritten by the migration - but resolve any id that still
+       slips through rather than showing a person a uuid. */
+    function readable(note) {
+      return String(note || '').replace(
+        /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
+        function (id) {
+          var n = WVT.personName(id);
+          return (n && n !== '—') ? n : id;
+        });
+    }
+
     var timeline = events.length ? events.map(function (e) {
       var bad = e.to_status === 'Rejected' || e.to_status === 'Changes Requested';
       var title = e.event === 'status'
@@ -1080,7 +1124,7 @@
         : (e.file_url ? ' <a href="' + esc(e.file_url) + '" target="_blank" rel="noopener">Open the link</a>' : '');
       return '<li class="' + (bad ? 'bad' : 'on') + '">' +
         '<div class="tl-t">' + esc(title) + (e.version ? ' <span class="muted">v' + e.version + '</span>' : '') + '</div>' +
-        (e.note ? '<div class="tl-m">' + esc(e.note) + attachedHere + '</div>' : (attachedHere ? '<div class="tl-m">' + attachedHere + '</div>' : '')) +
+        (e.note ? '<div class="tl-m">' + esc(readable(e.note)) + attachedHere + '</div>' : (attachedHere ? '<div class="tl-m">' + attachedHere + '</div>' : '')) +
         '<div class="tl-d">' + esc(e.actor_name || 'System') + ' · ' + esc(whenText(e.created_at)) + '</div></li>';
     }).join('') : '<li><div class="tl-m">Nothing recorded yet.</div></li>';
 
@@ -1140,7 +1184,7 @@
       return true;
     });
     $('cntDocs').textContent = String(WVT.data.companyDocs.length);
-    var editable = WVT.isGlobal();
+    var editable = WVT.canEditDocs();
     show('newDocBtn', editable);
 
     $('docList').innerHTML = list.length
@@ -1154,10 +1198,14 @@
             '<td>' + esc(WVT.fmtDate(d.expiry_date)) + '<div style="margin-top:3px">' + WVT.expiryChip(d.expiry_date) + '</div></td>' +
             '<td>' + (d.file_path
               ? '<button class="btn sm" data-openfile="' + esc(d.file_path) + '">Open</button>'
-              : '<span class="muted">none</span>') + '</td>' +
+              : (d.file_url
+                  ? '<a href="' + esc(d.file_url) + '" target="_blank" rel="noopener">Link</a>'
+                  : '<span class="muted">none</span>')) + '</td>' +
             '<td>' + (editable ? '<button class="btn sm" data-docedit="' + esc(d.id) + '">Edit</button>' : '') + '</td></tr>';
         }).join('') + '</tbody></table></div>'
-      : empty('No document matches.');
+      : empty(WVT.data.companyDocs.length
+          ? 'No document matches.'
+          : 'The vault is empty. Add your documents — name each one whatever you actually call it, and attach the PDF or paste a link.');
   }
 
   function openDocEditor(id) {
@@ -1177,6 +1225,7 @@
     setVal('cdIssue', d && d.issue_date);
     setVal('cdExpiry', d && d.expiry_date);
     setVal('cdNotes', d && d.notes);
+    setVal('cdLink', d && d.file_url);
     $('cdFileName').textContent = d && d.file_path ? 'Replace the attached file' : 'Click to attach the document';
     banner('cdBanner', '');
     WV.openOverlay('docOverlay');
@@ -1192,7 +1241,8 @@
       issuer: val('cdIssuer') || null,
       issue_date: dateOrNull('cdIssue'),
       expiry_date: dateOrNull('cdExpiry'),
-      notes: val('cdNotes') || null
+      notes: val('cdNotes') || null,
+      file_url: val('cdLink') || null
     };
     if (!state.editDocId) body.created_by = String(WV.currentUser.id);
 
@@ -1699,7 +1749,7 @@
     }
     var gate = WVT.tenderById(tenderId || state.emdTenderId);
     if (!emdId && gate && !WVT.isApproved(gate)) {
-      return WV.toast('No money goes out before a Go. Ask the VP or Founder to approve this tender first.');
+      return WV.toast('No money goes out before a Go. Ask the CEO, VP or Founder to approve this tender first.');
     }
     state.editEmdId = emdId || null;
     state.emdTenderId = tenderId || null;
@@ -1780,6 +1830,7 @@
 
   function renderTeam() {
     show('teamTab', WVT.isAdmin());
+    show('docsTab', WVT.canSeeDocs());
     if (!WVT.isAdmin()) return;
 
     /* Org tree, drawn by walking parents so the indent is real. */
@@ -2100,6 +2151,7 @@
     $('cntDocs').textContent = String(WVT.data.companyDocs.length);
     $('cntEmd').textContent  = String(WVT.data.emd.length);
     show('teamTab', WVT.isAdmin());
+    show('docsTab', WVT.canSeeDocs());
     show('newTenderBtn', WVT.canUpload());
   }
 
@@ -2150,6 +2202,51 @@
     WV.renderNotifications('notifList', 'notifBadge');
     show('loadingScreen', false);
     render();
+    startLiveUpdates();
+  }
+
+  /* ------------------------------------------------------------------ live --
+     Reloading under somebody's hands is worse than being slightly stale: half
+     a typed comment disappears, or a dropdown they were about to save resets.
+     So a change that arrives while ANY dialog is open is remembered and applied
+     the moment they close it. */
+  var pendingLive = false;
+
+  function anyOverlayOpen() {
+    return !!document.querySelector('.overlay.open');
+  }
+
+  async function applyLive() {
+    if (anyOverlayOpen()) { pendingLive = true; return; }
+    pendingLive = false;
+    await refresh();
+    if (state.detailId && detailOpen()) renderDetail();
+  }
+
+  function setLiveDot(status) {
+    var wrap = $('liveDot');
+    if (!wrap) return;
+    wrap.style.display = 'inline-flex';
+    var live = status === 'live';
+    $('liveDotMark').style.background = live ? 'var(--good)' : 'var(--warn)';
+    $('liveDotText').textContent = live ? 'Live' : 'Checking';
+    wrap.title = live
+      ? 'Updates arrive as they happen'
+      : 'Live connection unavailable — refreshing on a timer instead';
+  }
+
+  function startLiveUpdates() {
+    WVT.onLiveStatus = setLiveDot;
+    WVT.startLive(applyLive);
+    setLiveDot(WVT.live.status);
+
+    /* Whatever closed the dialog - the ✕, the backdrop, Escape, or a save -
+       a held-back update goes in as soon as nothing is open. Checking on a
+       timer rather than hooking every close path, because there are five of
+       them and missing one would strand the update forever. */
+    setInterval(function () {
+      if (pendingLive && !anyOverlayOpen()) applyLive();
+    }, 1000);
   }
 
   async function boot() {
@@ -2386,7 +2483,17 @@
         var who = $('rdAssign') ? $('rdAssign').value : '';
         if (!who) return banner('rdAssignBanner', 'Choose who should do it.', 'bad');
         e.target.disabled = true;
-        var asr = await WVT.saveRfp({ assigned_to: who }, state.rfpDetailId);
+        /* Handing it to a person IS the acceptance. Leaving a request at
+           'Requested' while somebody is already working on it would be a lie,
+           and accept/reject vanish once assigned, so it could never be tidied
+           up afterwards. */
+        var rq = null;
+        for (var qi = 0; qi < WVT.data.rfps.length; qi++) {
+          if (String(WVT.data.rfps[qi].id) === String(state.rfpDetailId)) { rq = WVT.data.rfps[qi]; break; }
+        }
+        var patch = { assigned_to: who };
+        if (rq && (rq.status === 'Requested' || rq.status === 'On Hold')) patch.status = 'Accepted';
+        var asr = await WVT.saveRfp(patch, state.rfpDetailId);
         e.target.disabled = false;
         if (!asr.ok) return banner('rdAssignBanner', 'Could not assign: ' + asr.error, 'bad');
         WV.toast('Given to ' + WVT.personName(who));
@@ -2451,6 +2558,7 @@
     /* --- RFP --- */
     on('newRfpBtn', 'click', function () { openRfpEditor(null); });
     on('reSave', 'click', saveRfp);
+    on('reTender', 'change', syncRequestTopic);
     on('rfpFilter', 'click', function (e) {
       var b = e.target.closest('button[data-f]');
       if (!b) return;

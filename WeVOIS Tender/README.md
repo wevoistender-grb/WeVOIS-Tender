@@ -1,6 +1,6 @@
 # WeVois Tender Portal
 
-Tender pipeline, RFP request tracking, company document vault and EMD register
+Tender pipeline, document requests, company document vault and EMD register
 for WeVois.
 
 A standalone system — its own Supabase project, its own users, its own hosting.
@@ -74,19 +74,36 @@ the dates were before is kept on the corrigendum, so the history survives.
 countdown chips that go amber at a week and red at three days. Anything past its
 date and still not filed is flagged at the top of the dashboard.
 
-**RFP requests** — anyone can ask for a document to be prepared. Two jobs, and
-they are not the same person:
+**Document requests** — anyone can ask for a document to be prepared. It used to
+be called *RFP requests*, which was wrong twice over: most of what gets asked for
+is not an RFP, and the word already means two other things here (a tender stage,
+and a document type). Both of those keep the name, because that is what the
+authority calls them. The feature is now **Request a Document**.
 
-- The **VP or Founder** receives the request and does one of three things:
-  **Accept**, **Put on hold**, or **Reject**. Accepting does not assign anyone.
+A request has to be about **something**. Either it hangs off a tender, or the
+person raising it names the topic — a project, a scheme, a client, an internal
+deck. Never neither: a request attached to nothing is one nobody can act on, and
+the list would fill with rows saying only "Not linked". When a tender *is*
+picked, the topic stays available but optional, for the phase or client the
+tender title does not say.
+
+Two jobs, and they are not the same person:
+
+- The **CEO, VP or Founder** receives the request and does one of three things:
+  **Accept**, **Put on hold**, or **Reject**. Nobody else sees those three —
+  not the tender team, not the person it will end up with.
 - Then they **hand it to a person** — anyone with access, whatever team they sit
   in: BD, their own team, the tender team, the Founder's team. Whoever knows the
-  subject.
+  subject. Handing it over **is** the acceptance, so assigning straight from
+  Requested accepts it in the same act.
+- **Once it is assigned, accept / hold / reject disappear for everyone.** Only
+  reassignment stays. Re-answering a request afterwards would leave somebody
+  working on something that had since been rejected.
 - That person does the work: In Preparation → Delivered → Revised, and attaches
   the copy.
 
 The VP is the vice president of the company; he is not going to sit and write
-the RFP. So he is never offered "start preparing" or the attach-a-copy box, and
+the document. So he is never offered "start preparing" or the attach-a-copy box, and
 the preparer is never offered accept or reject.
 
 Every step is timestamped by the database and the timeline is append-only, so
@@ -97,8 +114,20 @@ show on the dashboard.
 
 **Document vault** — the master copies every bid draws on, with expiry dates.
 Anything expiring within 60 days surfaces on the dashboard; anything already
-expired raises an alert. A new tender starts with the standard checklist
-pre-loaded from the vault.
+expired raises an alert.
+
+**It starts empty, and nothing is pre-named.** Guessing at a company's document
+list produces names nobody uses and a list people work around rather than with.
+The tender team types the name they actually call it and attaches the PDF, or
+pastes a link.
+
+**Only the Tender Team, the VP and the Founder see it at all** — AVP, DGM and BD
+do not get the tab. It holds registrations, financials and experience
+certificates, which is not everybody's business. Maintaining it stays with the
+tender team, who know which certificate is current and when it expires.
+
+An **uploaded** document is covered by that rule. A **linked** one is not —
+whoever holds the link can open it. The form says so.
 
 **Per-tender checklist** — what that tender demands, who is preparing each item,
 and what is still missing, with a progress bar on every row of the tender list.
@@ -108,17 +137,39 @@ estimated cost, EMD, fees, all five key dates and the contract period fill
 themselves in. It never overwrites anything you have already typed, and tells
 you exactly which fields it filled.
 
+**Live updates** — the portal used to load once at sign-in and never look again,
+so two people on the same tender saw different things until somebody pressed
+reload. Now changes arrive on their own, in three layers because any one of them
+can fail quietly:
+
+1. **Realtime** — Supabase streams row changes. Instant, but needs a working
+   websocket, and corporate networks do block those.
+2. **On return** — refreshes when you come back to the tab.
+3. **Every 90 seconds** — only while the tab is visible. The backstop for when
+   realtime never connected at all.
+
+A small **Live** dot in the top bar says which is happening: green when the
+stream is connected, amber when it has fallen back to the timer.
+
+Row level security applies to the stream too — you are only told about rows you
+could have read anyway.
+
+**An update that arrives while a dialog is open is held back** and applied the
+moment it closes. Reloading under somebody's hands is worse than being slightly
+stale: half a typed comment disappears, or a dropdown they were about to save
+resets underneath them.
+
 ## The flow
 
 1. **BD or the tender team** spots a tender and adds it.
 2. **A tender executive reads it** and records an **eligibility verdict** —
    are we eligible to bid, or not. *Not eligible* demands a reason, because
    that reason is what tells you which credential to go and build.
-3. Marking it **Eligible** hands it to the **VP and the Founder**: it appears
+3. Marking it **Eligible** hands it to the **CEO, the VP and the Founder**: it appears
    in a *Waiting for your decision* list on their dashboard, with how long it
    has been sitting there, and raises a notification.
-4. **VP or Founder** records **Go** or **No-Go**. They are the approving
-   authority — for tenders and for RFP assignments both.
+4. **The CEO, VP or Founder** records **Go** or **No-Go**. They are the
+   approving authority — for tenders and for document requests both.
 5. **Only after a Go** does work start. Until then nothing can be marked
    submitted and no EMD can be recorded.
 
@@ -129,7 +180,7 @@ bid nobody approved.
 
 Seeing a tender is not the same as being able to change it.
 
-| | Tender executives | VP · Founder | AVP · DGM | BD |
+| | Tender executives | CEO · VP · Founder | AVP · DGM | BD |
 |---|---|---|---|---|
 | See the tender and everything on it | yes | yes | yes | yes |
 | Create a new tender | yes | — | — | **yes** |
@@ -139,15 +190,27 @@ Seeing a tender is not the same as being able to change it.
 | EMD and fees *(after a Go)* | **yes** | no | no | no |
 | **Eligibility verdict** | **yes** | no | no | no |
 | **Go / No-Go decision** | no | **yes** | no | no |
-| Assign an RFP request | no | **yes** | no | no |
+| Assign a document request | no | **yes** | no | no |
+| **See the document vault** | **yes** | **yes** | no | no |
+| Maintain the vault | **yes** | no | no | no |
 | Comment | yes | yes | yes | yes |
 
 **Tender executives** are the Tender Team role. They do the work, so they own
 the file — but they raise the Go/No-Go request rather than answering it. Nobody
 approves their own tender.
 
-**VP and Founder are the approving authority.** One control on a tender, the
-Go/No-Go, plus RFP assignment. Everything else is read-only to them.
+**The CEO, the VP and the Founder are the approving authority.** One control on
+a tender, the Go/No-Go, plus assigning document requests. Everything else is
+read-only to them.
+
+**The CEO sees more than the VP**, and that is deliberate. The VP sees their own
+unit and everything under it, so a tender parked in the Founder's unit is
+invisible to them. The CEO is a *global* role, like the Founder and the Tender
+Team: every tender, whatever unit or region owns it. Nothing can be hidden from
+the CEO by filing it in the wrong place.
+
+What the CEO still cannot do is edit a tender or record a payment. Those stay
+with the tender executives and the tender team, exactly as they do for the VP.
 
 **AVP and DGM see everything and decide nothing.**
 
@@ -165,23 +228,24 @@ nothing. It is written as "keep the old row, allow these" rather than "block
 these", so a column added to the table in future is protected automatically
 instead of being forgotten.
 
-### RFP requests are private
+### Document requests are private
 
-An RFP request is visible **only** to the VP, the Founder, the person who raised
-it, and the person it was given to. Not to everyone who can see the tender, and
-not to the whole tender team — an executive sees only the requests assigned to
-them.
+A document request is visible **only** to the CEO, the VP, the Founder, the
+person who raised it, and the person it was given to. Not to everyone who can see the
+tender, and not to the whole tender team — an executive sees only the
+requests assigned to them.
 
 Anyone with access can raise one. It is raised **unassigned** — trying to assign
 one to yourself is stripped by the database, not just hidden in the interface.
-**Only the VP and the Founder decide who works on it.**
+**Only the CEO, the VP and the Founder decide who works on it.**
 
 **The copy itself follows the same rule.** The person preparing it attaches the
 document when it is ready — uploaded, or as a link. Every version is kept on the
 timeline rather than overwritten, so what changed between v1 and v2 survives.
 
 An **uploaded** copy is stored under `rfp/<request-id>/…` and reading it requires
-being able to read that request: Founder, VP, requester, preparer, nobody else.
+being able to read that request: Founder, CEO, VP, requester, preparer, and
+nobody else.
 Reassign the request and file access moves with it — the previous preparer loses
 it immediately.
 
@@ -197,8 +261,8 @@ A person sees a tender only when **both** are true:
 - the tender's region is one of theirs (tick none = every region).
 
 So the AVP's tenders are invisible to the DGM and the DGM's are invisible to the
-AVP, while the VP above them sees everything underneath, and the Founder and
-Tender Team see everything.
+AVP, while the VP above them sees everything underneath, and the Founder, the
+CEO and the Tender Team see everything.
 
 The org tree is configurable in the app — units, who reports into whom, regions
 and people. Nothing is hardcoded.
