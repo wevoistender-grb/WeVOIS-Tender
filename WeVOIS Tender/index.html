@@ -251,6 +251,11 @@
       <div class="field"><label for="fStage">Stage</label><select id="fStage"></select></div>
       <div class="field"><label for="fResult">Result</label><select id="fResult"></select></div>
       <div class="field"><label for="fMonth">Closing month</label><select id="fMonth"></select></div>
+      <div class="field"><label for="fDropped">Dropped ones</label><select id="fDropped">
+        <option value="hide">Hidden</option>
+        <option value="show">Shown too</option>
+        <option value="only">Only these</option>
+      </select></div>
     </div>
     <div class="card">
       <div class="card-head">
@@ -527,6 +532,8 @@
     <div class="modal-f">
       <button class="btn" data-close>Close</button>
       <button class="btn" id="dDecide" style="display:none">Go / No-Go decision</button>
+      <button class="btn" id="dDrop" style="display:none">Not pursuing this</button>
+      <button class="btn" id="dReopen" style="display:none">Pick it back up</button>
       <button class="btn primary" id="dEdit">Edit tender</button>
     </div>
   </div>
@@ -675,6 +682,37 @@
   </div>
 </div>
 
+<!-- Not pursuing this tender. Stacks on the tender file, so it is in STACKABLE.
+     A drop is a decision, not a deletion: the reason is the point of it. -->
+<div class="overlay" id="dropOverlay">
+  <div class="modal">
+    <div class="modal-h">
+      <div><h3 id="drTitle">Not pursuing this tender</h3><p id="drSub"></p></div>
+      <button class="x" data-close>&#10005;</button>
+    </div>
+    <div class="modal-b">
+      <div class="banner" id="drBanner" style="display:none"></div>
+      <p class="hint" style="margin:-2px 0 12px">
+        The tender stays on record and drops out of the working list. Why you walked away
+        is worth more than the tender &mdash; it is what tells you which credential to go
+        and build. You can pick it back up at any time and it returns to the stage it was at.
+      </p>
+      <div class="form-grid">
+        <div class="field full"><label for="drReason">Why are we not bidding? *</label>
+          <select id="drReason"></select></div>
+        <div class="field full"><label for="drNotes">Anything worth remembering</label>
+          <textarea id="drNotes" rows="3"
+            placeholder="Turnover needed 8 crore, we are at 5. Worth revisiting after FY27 accounts."></textarea>
+          <div class="hint">Optional, but the note is what makes this searchable next year</div></div>
+      </div>
+    </div>
+    <div class="modal-f">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn primary" id="drSave">Mark as not pursuing</button>
+    </div>
+  </div>
+</div>
+
 <!-- A firm we bid through. Maintained by the tender team. -->
 <div class="overlay" id="firmOverlay">
   <div class="modal">
@@ -803,6 +841,7 @@
       <div class="field"><label>Regions</label>
         <div class="checks" id="peRegions"></div>
         <div class="hint">Tick none to give every region</div></div>
+      <div class="banner info" id="pePreview">Who will see what</div>
     </div>
     <div class="modal-f">
       <button class="btn danger" id="peRemove" style="margin-right:auto">Remove</button>
@@ -836,6 +875,7 @@
       <div class="field"><label>Regions</label>
         <div class="checks" id="nuRegions"></div>
         <div class="hint">Tick none to give every region</div></div>
+      <div class="banner info" id="nuPreview">Who will see what</div>
       <label class="checks" style="display:flex"><input type="checkbox" id="nuAccess" checked>
         <span>May open the Tender Portal straight away</span></label>
     </div>

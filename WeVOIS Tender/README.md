@@ -70,6 +70,38 @@ was. Record it with the dates it revised, and those dates are applied to the
 tender itself — the portal has been updated, so your copy has to move too. What
 the dates were before is kept on the corrigendum, so the history survives.
 
+**Not pursuing a tender** — most tenders you look at, you do not bid. That is
+normal, and *why* you walked away is worth more than the tender itself: too
+small, not eligible, deadline already gone, bidding a better one in the same
+district. That is the pattern that tells you which credential to go and build.
+
+So there are two different actions, and they are not the same thing:
+
+- **Not pursuing this** asks for a reason, parks the tender out of the working
+  list, and keeps everything. It records who dropped it, when, and the stage it
+  was standing at. **Pick it back up** puts it exactly there again — not at some
+  guessed stage. A drop is a decision, and decisions get reversed.
+- **Delete** is for rows that should never have existed: a duplicate, a typo,
+  somebody testing the form. Nothing to learn, so nothing to keep.
+
+Dropped tenders leave the tender list, the dashboard counts, the "closing soon"
+numbers and the leadership's *waiting for your decision* list — a tender nobody
+is bidding should not sit on somebody's work list forever. The **Dropped ones**
+filter brings them back when you want them.
+
+**Deleting is the tender executives' and an administrator's.** It used to be
+anyone with global visibility, which handed it to the Founder and the CEO —
+people who cannot change one field on a tender. Being able to destroy a row you
+may not edit makes no sense.
+
+**A tender with money recorded against it cannot be deleted at all** — not by an
+executive, not by an administrator. An EMD or a fee means real cash left the
+company and a refund is owed back; the tender row is the only thing tying that
+payment to an authority. Delete it and the payment rows go with it, and nobody
+chases the refund because nobody knows it exists. Remove the payments first if
+they really were a mistake. Two deliberate steps beat one that quietly destroys
+both.
+
 **Deadlines** — a "closing in the next 15 days" list (switchable to 7 or 30) with
 countdown chips that go amber at a week and red at three days. Anything past its
 date and still not filed is flagged at the top of the dashboard.
@@ -187,6 +219,8 @@ Seeing a tender is not the same as being able to change it.
 | Edit it after it exists | **yes** | no | no | no |
 | Stage, dates, scope, money | **yes** | no | no | no |
 | Checklist, corrigenda, firms & bids | **yes** | no | no | no |
+| **Mark it "not pursuing"** | **yes** | no | no | no |
+| **Delete a tender** | **yes** | no | no | no |
 | EMD and fees *(after a Go)* | **yes** | no | no | no |
 | **Eligibility verdict** | **yes** | no | no | no |
 | **Go / No-Go decision** | no | **yes** | no | no |

@@ -305,6 +305,10 @@ tbody tr.clickable{cursor:pointer}
 }
 .banner.ok{background:color-mix(in srgb,var(--good) 12%,transparent); color:var(--good); border-color:color-mix(in srgb,var(--good) 28%,transparent)}
 .banner.bad{background:color-mix(in srgb,var(--bad) 12%,transparent); color:var(--bad); border-color:color-mix(in srgb,var(--bad) 28%,transparent)}
+/* "Who will see what" live preview in the create/edit-access modals — a plain
+   statement of the visibility rule the current picks add up to, not a warning
+   or an error, so it gets the brand color rather than warn/good/bad. */
+.banner.info{background:color-mix(in srgb,var(--brand) 12%,transparent); color:var(--brand-2); border-color:color-mix(in srgb,var(--brand) 28%,transparent)}
 /* period picker row: section title on the left, dropdowns on the right */
 .period-bar{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap}
 .period-pick{display:flex; gap:8px; align-items:center}

@@ -71,6 +71,19 @@
      into the nearest wrong box where it quietly skews the reporting. */
   WVT.LOSS_REASONS = ['Technical', 'Financial', 'Wrong documents uploaded', 'Other'];
 
+  /* Why we walked away before bidding. Different question from LOSS_REASONS,
+     which is why a bid we DID file lost. Confusing the two loses the more
+     useful of the two answers: what we keep disqualifying ourselves from. */
+  WVT.DROP_REASONS = [
+    'Too small to be worth it',
+    'We are not eligible',
+    'Deadline already gone',
+    'Bidding a better one in the same area',
+    'Terms are unworkable',
+    'Authority cancelled it',
+    'Other'
+  ];
+
   /* The tender team's verdict after reading the notice. 'Not checked' exists so
      you can tell a tender nobody has looked at from one that was looked at and
      passed - without it, an untouched backlog looks like a clean bill. */
@@ -150,6 +163,35 @@
     if (WVT.GLOBAL_ROLES.indexOf(me.tender_role) >= 0) return true;
     var t = WVT.teamById(me.tender_team_id);
     return !!(t && t.scope === 'global');
+  };
+
+  /* Plain-English "who will see what" for the person an admin is about to
+     create or is currently editing — computed from the picks in the form
+     BEFORE they are saved, so a mistake (wrong unit, forgetting a region)
+     shows up immediately instead of after the account exists.
+     Mirrors WVT.isGlobal()/WVT.canSee() exactly, just taking the candidate
+     account level / tender role / org unit / regions as arguments instead of
+     reading WVT.me, since the person being described usually isn't WVT.me. */
+  WVT.describeAccess = function (accountRole, tenderRole, teamId, regionIds) {
+    regionIds = regionIds || [];
+    if (accountRole === 'admin') {
+      return 'Administrator — sees and can change every tender in the company.';
+    }
+    if (WVT.GLOBAL_ROLES.indexOf(tenderRole) >= 0) {
+      return 'Sees every tender in the company, whatever the org unit or region — the "' +
+        (WVT.ROLE_LABEL[tenderRole] || tenderRole) + '" role always sees everything.';
+    }
+    var team = WVT.teamById(teamId);
+    if (team && team.scope === 'global') {
+      return 'Sees every tender in the company — the "' + team.name + '" unit is set to see everything.';
+    }
+    if (!team) {
+      return 'No org unit chosen yet — until one is set, this person will not see any tenders.';
+    }
+    var regionPart = regionIds.length
+      ? 'only in: ' + regionIds.map(WVT.regionName).join(', ')
+      : 'in every region (no region ticked)';
+    return 'Sees tenders filed under "' + team.name + '" and any unit below it — ' + regionPart + '.';
   };
 
   WVT.hasAccess = function () {
@@ -255,6 +297,10 @@
      decision. This is the VP's and Founder's work list. */
   WVT.awaitingDecision = function (list) {
     return (list || WVT.data.tenders).filter(function (t) {
+      /* A dropped tender is not waiting on anybody. Left in, one Eligible
+         tender nobody is bidding would sit on the leadership's work list until
+         somebody deleted it. */
+      if (WVT.isDropped(t)) return false;
       return t.eligibility_status === 'Eligible' && !t.go_no_go;
     }).sort(function (a, b) {
       return String(a.submission_date || '9999').localeCompare(String(b.submission_date || '9999'));
@@ -298,7 +344,15 @@
     var me = WVT.me;
     return !!(me && me.tender_access && ['ceo', 'vp', 'founder'].indexOf(me.tender_role) >= 0);
   };
-  WVT.canDelete = function ()  { return WVT.isAdmin() || WVT.isGlobal(); };
+  /* Deleting is the tender executives' and an administrator's, and nobody
+     else's. It used to be isGlobal(), which handed it to the Founder and the
+     CEO - people who cannot change one field on a tender. Being able to
+     destroy a row you may not edit makes no sense. Mirrors the tenders_delete
+     policy. */
+  WVT.canDelete = function ()  { return WVT.isTenderTeam(); };
+
+  /* Dropping is an edit, so it follows the edit rule exactly. */
+  WVT.canDrop = function (t)   { return WVT.canEditTender(t); };
   WVT.canUpload = function () {
     if (WVT.isGlobal()) return true;
     var t = WVT.teamById(WVT.me && WVT.me.tender_team_id);
@@ -408,6 +462,7 @@
     return WVT.data.tenders.filter(function (t) {
       if (WVT.isSubmitted(t)) return false;
       if (t.go_no_go === 'No-Go') return false;
+      if (WVT.isDropped(t)) return false;   /* its deadline stopped mattering */
       var d = WVT.daysTo(t.submission_date);
       return d != null && d <= win;          // includes anything already overdue
     }).sort(function (a, b) {
@@ -547,6 +602,38 @@
         ? 'Saved, but ' + dropped.join(' and ') + ' was not stored - run WEVOIS-TENDER-01-setup.sql in Supabase first.'
         : null
     };
+  };
+
+  /* The reason IS the drop. One field to read, so there is no way for the
+     flags to disagree with each other. Mirrors the database trigger. */
+  WVT.isDropped = function (t) { return !!(t && t.drop_reason); };
+
+  /* Money already recorded is what turns a delete from tidying up into a loss:
+     the payment rows cascade away with the tender and nobody chases the
+     refund. The database refuses this outright (tenders_guard_delete); this is
+     here so the person is told BEFORE they click, not by an error afterwards. */
+  WVT.deleteBlockedBy = function (id) {
+    var rows = WVT.emdFor(id);
+    if (!rows.length) return null;
+    var total = 0;
+    rows.forEach(function (e) { total += Number(e.amount) || 0; });
+    return { count: rows.length, total: total };
+  };
+
+  WVT.dropTender = async function (id, reason, notes) {
+    if (!reason) return { ok: false, error: 'Pick a reason. That is the whole point of recording it.' };
+    var r = await WV.sb.from('tenders')
+      .update({ drop_reason: reason, drop_notes: notes || null, dropped_by: String(WV.currentUser.id) })
+      .eq('id', String(id)).select().maybeSingle();
+    return r.error ? { ok: false, error: r.error.message } : { ok: true, row: r.data };
+  };
+
+  /* Clearing the reason is what reopens it. The trigger puts the stage back to
+     wherever the tender was standing when it was dropped. */
+  WVT.reopenTender = async function (id) {
+    var r = await WV.sb.from('tenders')
+      .update({ drop_reason: null, drop_notes: null }).eq('id', String(id)).select().maybeSingle();
+    return r.error ? { ok: false, error: r.error.message } : { ok: true, row: r.data };
   };
 
   WVT.deleteTender = async function (id) {
@@ -1188,6 +1275,14 @@
   WVT.filterTenders = function (f) {
     f = f || {};
     return WVT.data.tenders.filter(function (t) {
+      /* Dropped ones are out of the working list unless asked for. Default is
+         'hide' when the caller says nothing, because every other screen that
+         calls this - the dashboard, the deadline list, the roll-ups - wants
+         what is live, not what was abandoned. */
+      var dropped = WVT.isDropped(t);
+      var mode = f.dropped || 'hide';
+      if (mode === 'hide' && dropped) return false;
+      if (mode === 'only' && !dropped) return false;
       if (f.region && f.region !== 'all' && String(t.region_id) !== f.region) return false;
       if (f.team   && f.team   !== 'all' && String(t.team_id)   !== f.team)   return false;
       if (f.stage  && f.stage  !== 'all' && t.stage             !== f.stage)  return false;

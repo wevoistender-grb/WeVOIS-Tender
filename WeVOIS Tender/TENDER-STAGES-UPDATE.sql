@@ -1156,9 +1156,179 @@ insert into public.tender_teams (id, name, parent_id, scope, can_upload, sort)
 values ('ceo', 'CEO', 'founder', 'global', true, 15)
 on conflict (id) do nothing;
 
+-- ---------------------------------------------------------------------------
+--  19. NOT MOVING ALONG WITH THIS ONE
+--
+--  Two different things, and they were being asked to do one job:
+--
+--    DROPPED - we looked at it and decided not to bid. The tender was real,
+--    the decision was real, and WHY we walked away is worth more than the
+--    tender itself: too small, no eligibility, deadline already gone, a better
+--    one in the same district. That is the pattern that tells you which
+--    credential to go and build. Destroying it destroys the pattern.
+--
+--    DELETED - it should never have been a row. A duplicate, a typo, someone
+--    testing the form. Nothing to learn, so nothing to keep.
+--
+--  There is already a 'Closed' stage meaning "dropped, cancelled or otherwise
+--  finished", but it records no reason, so six months later nobody can say why
+--  any of them closed.
+--
+--  The REASON is what makes it a drop. Setting drop_reason parks the tender;
+--  clearing it puts the tender back exactly where it was, which is the whole
+--  point of keeping stage_before_drop. A drop is a decision, not a deletion,
+--  and decisions get reversed.
+-- ---------------------------------------------------------------------------
+alter table public.tenders add column if not exists drop_reason      text;
+alter table public.tenders add column if not exists drop_notes       text;
+alter table public.tenders add column if not exists dropped_at       timestamptz;
+alter table public.tenders add column if not exists dropped_by       text;
+alter table public.tenders add column if not exists stage_before_drop text;
+
+comment on column public.tenders.drop_reason is
+  'Why we are not bidding. Setting this parks the tender; clearing it reopens. Not constrained on purpose - the list of reasons is the app''s, and it will grow.';
+comment on column public.tenders.stage_before_drop is
+  'Where the tender was when it was dropped, so reopening puts it back rather than guessing.';
+
+create index if not exists tenders_dropped_idx on public.tenders (dropped_at)
+  where dropped_at is not null;
+
+-- Stage, result and the drop, kept in step. One trigger owns all three,
+-- because two triggers fighting over the same two columns is how a tender ends
+-- up Awarded and Cancelled at the same time.
+create or replace function public.wv_tender_sync_result()
+returns trigger
+language plpgsql
+as $fn$
+begin
+  -- 1. Stage drives result.
+  if new.stage = 'Awarded' then
+    new.result := 'Awarded';
+
+  elsif new.stage = 'Not Awarded' then
+    new.result := 'Not Awarded';
+
+  elsif tg_op = 'UPDATE'
+        and old.stage in ('Awarded', 'Not Awarded')
+        and new.stage not in ('Awarded', 'Not Awarded') then
+    -- Dragged back into the pipeline: the recorded outcome no longer holds.
+    new.result      := 'Pending';
+    new.result_date := null;
+  end if;
+
+  -- 2. The drop overrides both, in either direction.
+  if tg_op = 'UPDATE' then
+    if new.drop_reason is not null and old.drop_reason is null then
+      -- Parked. Remember where it was standing.
+      new.dropped_at        := coalesce(new.dropped_at, now());
+      new.dropped_by        := coalesce(new.dropped_by, auth.uid()::text);
+      new.stage_before_drop := old.stage;
+      new.stage             := 'Closed';
+      new.result            := 'Cancelled';
+
+    elsif new.drop_reason is null and old.drop_reason is not null then
+      -- Reopened. Put it back where it was, not at some guessed stage.
+      new.dropped_at        := null;
+      new.dropped_by        := null;
+      new.drop_notes        := null;
+      new.stage             := coalesce(old.stage_before_drop, 'Under Review');
+      new.stage_before_drop := null;
+      if old.result = 'Cancelled' then
+        new.result      := 'Pending';
+        new.result_date := null;
+      end if;
+    end if;
+
+  elsif tg_op = 'INSERT' and new.drop_reason is not null then
+    new.dropped_at := coalesce(new.dropped_at, now());
+    new.dropped_by := coalesce(new.dropped_by, auth.uid()::text);
+  end if;
+
+  -- 3. Housekeeping, after the result has settled.
+  if new.result in ('Awarded', 'Not Awarded') and new.result_date is null then
+    new.result_date := current_date;
+  end if;
+
+  -- A loss reason on anything other than a loss is noise. Clear it.
+  if new.result is distinct from 'Not Awarded' then
+    new.loss_reason       := null;
+    new.loss_reason_notes := null;
+  end if;
+
+  -- And a drop reason on a tender that is not dropped is the same noise.
+  if new.drop_reason is null then
+    new.drop_notes        := null;
+    new.dropped_at        := null;
+    new.dropped_by        := null;
+    new.stage_before_drop := null;
+  end if;
+
+  return new;
+end
+$fn$;
+
+drop trigger if exists tenders_sync_result on public.tenders;
+create trigger tenders_sync_result
+  before insert or update on public.tenders
+  for each row execute function public.wv_tender_sync_result();
+
+
+-- ---------------------------------------------------------------------------
+--  DELETING A TENDER
+--
+--  Narrowed on purpose. It used to be wv_tender_is_global(), which let the
+--  Founder, the CEO and anyone sitting in a global-scope unit destroy a tender
+--  they are not allowed to EDIT. Being able to delete a row you cannot change
+--  one field of makes no sense; the interface never offered it, but the
+--  database allowed it, and the database is what counts.
+--
+--  So: the tender executives, who own the file, plus an administrator as the
+--  safety valve. Everyone else drops instead.
+-- ---------------------------------------------------------------------------
+drop policy if exists tenders_delete on public.tenders;
+create policy tenders_delete on public.tenders for delete to authenticated
+  using ( public.wv_is_tender_team()
+          and public.wv_can_see_tender(team_id, region_id) );
+
+-- Money is where a delete stops being tidying up and starts being a loss.
+--
+-- An EMD, a bank guarantee or a tender fee means real cash left the company
+-- and a refund is owed back. The tender row is the only thing tying that
+-- payment to an authority and a bid; delete it and the payment rows cascade
+-- with it, and nobody ever chases the refund because nobody knows it exists.
+--
+-- This refuses everyone, administrators included. Not an oversight: if the
+-- payment really was recorded by mistake, remove the payment first and then
+-- the tender. Two deliberate steps beats one that quietly destroys both.
+create or replace function public.wv_tenders_guard_delete()
+returns trigger language plpgsql security definer set search_path = public as $fn$
+declare
+  v_n     integer;
+  v_total numeric;
+begin
+  select count(*), coalesce(sum(amount), 0)
+    into v_n, v_total
+    from public.tender_emd
+   where tender_id = old.id;
+
+  if v_n > 0 then
+    raise exception
+      'Cannot delete "%": % payment(s) totalling % are recorded against it. Deleting would destroy the record of money still to be chased. Remove the payments first, or mark the tender as not pursued instead.',
+      old.title, v_n, round(v_total);
+  end if;
+
+  return old;
+end
+$fn$;
+
+drop trigger if exists tenders_guard_delete on public.tenders;
+create trigger tenders_guard_delete
+  before delete on public.tenders
+  for each row execute function public.wv_tenders_guard_delete();
+
 -- ===========================================================================
---  19. VERIFICATION
---  Expect:  2 - 1 - true - true - 0 - 4 - true - 2 - 1 - true - true - true - 5 - true - 2 - 1 - true - 14 - 1 - 1 - true - true
+--  20. VERIFICATION
+--  Expect:  2 - 1 - true - true - 0 - 4 - true - 2 - 1 - true - true - true - 5 - true - 2 - 1 - true - 14 - 1 - 1 - true - true - 5 - true - true
 --  new tender columns, the corrigenda table, RLS on it, the result trigger,
 --  "no tender still carries the old 'Lost' result", the four EMD policies,
 --  the EMD permission function, the two new tables, the firm_id on EMD, and
@@ -1233,4 +1403,14 @@ select
   (select pg_get_functiondef(p.oid) like '%''ceo''%'
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname='public' and p.proname='wv_tender_is_global'
-  ) as ceo_sees_all;
+  ) as ceo_sees_all,
+  (select count(*) from information_schema.columns
+    where table_schema='public' and table_name='tenders'
+      and column_name in ('drop_reason','drop_notes','dropped_at','dropped_by','stage_before_drop')
+  ) as drop_columns,
+  (select count(*) > 0 from pg_trigger
+    where tgname='tenders_guard_delete' and not tgisinternal
+  ) as delete_money_guard,
+  (select pg_get_expr(polqual, polrelid) like '%wv_is_tender_team%'
+     from pg_policy where polname='tenders_delete'
+  ) as delete_is_tender_team;

@@ -9,7 +9,7 @@
  * Without a bump, a returning device keeps the old script: the page shows the
  * new markup but the JavaScript does nothing - a silent, confusing failure.
  */
-const CACHE_VERSION = 'wevois-tender-14';
+const CACHE_VERSION = 'wevois-tender-16';
 const SHELL = [
   './',
   'index.html',

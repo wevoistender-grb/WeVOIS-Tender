@@ -17,6 +17,7 @@
     editEmdId: null,
     corrTenderId: null,
     decideId: null,
+    dropId: null,
     editFirmId: null,
     bidTenderId: null,
     editBidId: null,
@@ -62,7 +63,7 @@
      back to the dashboard instead of back to the tender they were working on.
      So when one of these is stacked we close only the top one, and swallow the
      event before the global handler sees it. */
-  var STACKABLE = ['emdOverlay', 'rfpOverlay', 'corrOverlay', 'bidOverlay', 'decideOverlay'];
+  var STACKABLE = ['emdOverlay', 'rfpOverlay', 'corrOverlay', 'bidOverlay', 'decideOverlay', 'dropOverlay'];
 
   function detailOpen() {
     var el = $('detailOverlay');
@@ -128,7 +129,10 @@
      ======================================================================== */
 
   function renderDash() {
-    var all = WVT.data.tenders;
+    /* The dashboard is about what is in play. A tender we walked away from has
+       no deadline worth counting and no decision worth chasing - leaving it in
+       would put abandoned tenders in the "closing soon" number. */
+    var all = WVT.data.tenders.filter(function (t) { return !WVT.isDropped(t); });
     var s = WVT.summary(all);
     var emd = WVT.emdOutstanding();
 
@@ -269,7 +273,8 @@
       team:   $('fTeam')   ? $('fTeam').value   : 'all',
       stage:  $('fStage')  ? $('fStage').value  : 'all',
       result: $('fResult') ? $('fResult').value : 'all',
-      month:  $('fMonth')  ? $('fMonth').value  : 'all'
+      month:  $('fMonth')  ? $('fMonth').value  : 'all',
+      dropped: $('fDropped') ? $('fDropped').value : 'hide'
     };
   }
 
@@ -298,7 +303,10 @@
         '<div class="muted" style="font-size:11px">EMD ' + esc(shortMoney(t.emd_amount)) + '</div></td>' +
       '<td>' + esc(WVT.fmtDate(t.submission_date)) + '<div style="margin-top:3px">' + WVT.deadlineChip(t) + '</div></td>' +
       '<td>' + WVT.stageBadge(t.stage) +
-        (t.go_no_go === 'No-Go' ? '<div class="muted" style="font-size:11px;margin-top:3px">No-Go</div>' : '') + '</td>' +
+        (t.go_no_go === 'No-Go' ? '<div class="muted" style="font-size:11px;margin-top:3px">No-Go</div>' : '') +
+        (WVT.isDropped(t)
+          ? '<div class="muted" style="font-size:11px;margin-top:3px">Not pursuing — ' + esc(t.drop_reason) + '</div>'
+          : '') + '</td>' +
       '<td><div class="prog"><i style="width:' + pct + '%"></i></div>' +
         '<div class="muted" style="font-size:11px;margin-top:3px">' + p.done + '/' + p.total + '</div></td>' +
       '<td>' + WVT.resultBadge(t.result) + '</td></tr>';
@@ -314,7 +322,7 @@
   function renderTenders() {
     fillTenderFilters();
     var list = WVT.filterTenders(currentFilter());
-    $('cntTenders').textContent = String(WVT.data.tenders.length);
+    $('cntTenders').textContent = String(WVT.data.tenders.filter(function (t) { return !WVT.isDropped(t); }).length);
     $('tListTitle').textContent = list.length + ' tender' + (list.length === 1 ? '' : 's');
 
     if (!list.length) {
@@ -623,7 +631,22 @@
     if (!state.editId) return;
     var t = WVT.tenderById(state.editId);
     if (!t) return;
-    if (!window.confirm('Delete "' + t.title + '" and everything filed under it? This cannot be undone.')) return;
+
+    /* Money already recorded means a refund somebody has to chase. Deleting
+       the tender cascades those rows away and the refund is never chased,
+       because nobody knows it exists. The database refuses this outright; this
+       says so before the click rather than after it. */
+    var blocked = WVT.deleteBlockedBy(t.id);
+    if (blocked) {
+      return banner('teBanner',
+        'This tender has ' + blocked.count + ' payment' + (blocked.count === 1 ? '' : 's') +
+        ' recorded against it, ' + money(blocked.total) + ' in all. Deleting it would destroy ' +
+        'the record of money still to be chased. Remove the payments first, or mark it as ' +
+        'not pursuing instead — that keeps the record.', 'bad');
+    }
+
+    if (!window.confirm('Delete "' + t.title + '" and everything filed under it? This cannot be undone.\n\n' +
+        'If we simply are not bidding, close this and use "Not pursuing this" instead — it keeps the reason.')) return;
     var r = await WVT.deleteTender(state.editId);
     if (!r.ok) return banner('teBanner', 'Could not delete: ' + r.error, 'bad');
     await WV.logActivity('Tender deleted', t.title, t.id);
@@ -685,6 +708,9 @@
     show('dEdit', WVT.canEditTender(t));
     /* Leadership do not edit the file, but they do decide whether we bid. */
     show('dDecide', WVT.canDecide(t) && !WVT.canEditTender(t));
+    /* Dropping and picking back up are the same permission, opposite ways. */
+    show('dDrop',   WVT.canDrop(t) && !WVT.isDropped(t));
+    show('dReopen', WVT.canDrop(t) &&  WVT.isDropped(t));
     renderDetail();
     WV.openOverlay('detailOverlay');
   }
@@ -711,6 +737,18 @@
   function renderDetailInfo(t) {
     var d = WVT.deadlineState(t);
     var elig = t.eligibility_status || 'Not checked';
+    /* If we walked away from this one, that is the first thing to know about
+       it - before the dates, before the money. */
+    var droppedNote = WVT.isDropped(t)
+      ? '<div class="banner warn" style="display:flex;margin-bottom:14px"><div>' +
+          '<b>Not pursuing this tender.</b> ' + esc(t.drop_reason) +
+          (t.drop_notes ? ' — ' + esc(t.drop_notes) : '') +
+          '<div class="muted" style="font-size:11px;margin-top:4px">Dropped ' +
+            esc(whenText(t.dropped_at)) +
+            (t.dropped_by ? ' by ' + esc(WVT.personName(t.dropped_by)) : '') +
+            (t.stage_before_drop ? ' · it was at ' + esc(t.stage_before_drop) : '') +
+          '</div></div></div>'
+      : '';
     var eligCls = elig === 'Eligible' ? 'b-paid' : elig === 'Not eligible' ? 'b-hold' : 'b-none';
     var rows = [
       ['Stage', WVT.stageBadge(t.stage) + ' ' + WVT.deadlineChip(t)],
@@ -764,9 +802,51 @@
         (latest && latest.issued_date ? ' <span class="muted">— latest ' + esc(WVT.fmtDate(latest.issued_date)) + '</span>' : '')]);
     }
 
-    $('dInfo').innerHTML = '<dl class="kv">' + rows.map(function (r) {
+    $('dInfo').innerHTML = droppedNote + '<dl class="kv">' + rows.map(function (r) {
       return '<dt>' + esc(r[0]) + '</dt><dd>' + r[1] + '</dd>';
     }).join('') + '</dl>';
+  }
+
+  /* ---- not pursuing this one ---- */
+
+  function openDropDialog() {
+    var t = WVT.tenderById(state.detailId);
+    if (!t) return;
+    state.dropId = t.id;
+    $('drSub').textContent = t.title;
+    $('drReason').innerHTML = opts(WVT.DROP_REASONS, '', 'Pick one');
+    setVal('drNotes', '');
+    banner('drBanner', '');
+    WV.openOverlay('dropOverlay');
+  }
+
+  async function saveDrop() {
+    if (!state.dropId) return;
+    var reason = val('drReason');
+    if (!reason) return banner('drBanner', 'Pick a reason — that is the whole point of recording it.', 'bad');
+    $('drSave').disabled = true;
+    var r = await WVT.dropTender(state.dropId, reason, val('drNotes'));
+    $('drSave').disabled = false;
+    if (!r.ok) return banner('drBanner', 'Could not save: ' + r.error, 'bad');
+    var t = WVT.tenderById(state.dropId);
+    await WV.logActivity('Tender dropped', (t ? t.title + ' — ' : '') + reason, state.dropId);
+    closeTop('dropOverlay');
+    WV.toast('Marked as not pursuing');
+    await refresh();
+    if (state.detailId) { openDetail(state.detailId); }
+  }
+
+  async function reopenTender() {
+    var t = WVT.tenderById(state.detailId);
+    if (!t) return;
+    if (!window.confirm('Pick "' + t.title + '" back up? It returns to ' +
+        (t.stage_before_drop || 'Under Review') + ', where it was when it was dropped.')) return;
+    var r = await WVT.reopenTender(t.id);
+    if (!r.ok) return WV.toast('Could not reopen: ' + r.error);
+    await WV.logActivity('Tender picked back up', t.title, t.id);
+    WV.toast('Back in the working list');
+    await refresh();
+    openDetail(t.id);
   }
 
   function renderDetailCheck(t) {
@@ -1898,7 +1978,22 @@
     ['nuName', 'nuEmail', 'nuPass', 'nuMobile', 'nuDesig'].forEach(function (id) { setVal(id, ''); });
     setChk('nuAccess', true);
     banner('nuBanner', '');
+    updateNuPreview();
     WV.openOverlay('userOverlay');
+  }
+
+  /* Live "who will see what" readout for the create-user modal — recomputed
+     on every change to account level / org unit / tender role / regions, so
+     the consequence of the picks is visible before the account is created. */
+  function updateNuPreview() {
+    var el = $('nuPreview');
+    if (!el) return;
+    el.textContent = WVT.describeAccess(
+      val('nuAccount') || 'member',
+      val('nuRole') || null,
+      val('nuTeam') || null,
+      WV.$$('#nuRegions input:checked').map(function (i) { return i.value; })
+    );
   }
 
   async function createUser() {
@@ -1982,7 +2077,23 @@
     show('peRemove', !self);
     banner('peBanner', inactive ? 'This account is deactivated and cannot sign in.' : '',
       inactive ? 'bad' : null);
+    updatePePreview();
     WV.openOverlay('personOverlay');
+  }
+
+  /* Live "who will see what" readout for the edit-access modal. Account level
+     (admin/member) isn't editable from here, so it's read from the profile
+     being edited rather than from a form field. */
+  function updatePePreview() {
+    var el = $('pePreview');
+    if (!el) return;
+    var p = WVT.profileById(state.editPersonId);
+    el.textContent = WVT.describeAccess(
+      p && p.role,
+      val('peRole') || null,
+      val('peTeam') || null,
+      WV.$$('#peRegions input:checked').map(function (i) { return i.value; })
+    );
   }
 
   async function togglePerson() {
@@ -2144,7 +2255,7 @@
     if (state.view === 'emd')     renderEmd();
     if (state.view === 'team')    renderTeam();
 
-    $('cntTenders').textContent = String(WVT.data.tenders.length);
+    $('cntTenders').textContent = String(WVT.data.tenders.filter(function (t) { return !WVT.isDropped(t); }).length);
     $('cntRfps').textContent = String(WVT.data.rfps.filter(function (r) {
       return WVT.RFP_OPEN.indexOf(r.status) >= 0;
     }).length);
@@ -2550,6 +2661,10 @@
     on('newTenderBtn', 'click', function () { openTenderEditor(null); });
     on('teSave', 'click', saveTender);
     on('teDelete', 'click', deleteTender);
+    on('dDrop',   'click', openDropDialog);
+    on('dReopen', 'click', reopenTender);
+    on('drSave',  'click', saveDrop);
+    on('fDropped', 'change', renderTenders);
     on('tePdfDrop', 'click', function () { $('tePdf').click(); });
     on('tePdf', 'change', function (e) {
       if (e.target.files && e.target.files[0]) readTenderPdf(e.target.files[0]);
@@ -2596,9 +2711,16 @@
     on('suConfirm', 'keydown', function (e) { if (e.key === 'Enter') $('suCreate').click(); });
     on('newUserBtn', 'click', openUserEditor);
     on('nuSave', 'click', createUser);
+    on('nuAccount', 'change', updateNuPreview);
+    on('nuTeam', 'change', updateNuPreview);
+    on('nuRole', 'change', updateNuPreview);
+    on('nuRegions', 'change', updateNuPreview);
     on('peSave', 'click', savePerson);
     on('peToggle', 'click', togglePerson);
     on('peRemove', 'click', removePerson);
+    on('peTeam', 'change', updatePePreview);
+    on('peRole', 'change', updatePePreview);
+    on('peRegions', 'change', updatePePreview);
     on('newTeamBtn', 'click', function () { openTeamEditor(null); });
     on('tuSave', 'click', saveTeam);
     on('tuDelete', 'click', deleteTeam);
