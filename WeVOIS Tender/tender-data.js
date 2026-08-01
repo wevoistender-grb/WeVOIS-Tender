@@ -23,7 +23,7 @@
   WVT.STAGES = [
     'Spotted',
     'Under Review',
-    'RFP',
+    'Document In Hand',
     'NIT',
     'Go / No-Go',
     'Documents',
@@ -40,7 +40,7 @@
   WVT.STAGE_HELP = {
     'Spotted':      'Found on the portal, nothing checked yet',
     'Under Review': 'Reading the document, checking eligibility',
-    'RFP':          'Request for proposal in hand, being studied',
+    'Document In Hand': 'The tender document is in hand, being studied',
     'NIT':          'Notice inviting tender published by the authority',
     'Go / No-Go':   'Decision pending on whether we bid',
     'Documents':    'Preparing the papers this tender demands',
@@ -69,7 +69,7 @@
   /* Why a bid did not win. 'Other' is deliberately there: the day someone loses
      for a reason not on this list you want it written in the notes, not forced
      into the nearest wrong box where it quietly skews the reporting. */
-  WVT.LOSS_REASONS = ['Technical', 'Financial', 'Wrong documents uploaded', 'Other'];
+  WVT.LOSS_REASONS = ['Did Not Qualify', 'Lost on Price', 'Wrong documents uploaded', 'Other'];
 
   /* Why we walked away before bidding. Different question from LOSS_REASONS,
      which is why a bid we DID file lost. Confusing the two loses the more
@@ -105,7 +105,7 @@
   /* 'On Hold' counts as open: parked is not finished, and a request nobody has
      answered should keep showing up until somebody does. */
   WVT.RFP_OPEN    = ['Requested', 'On Hold', 'Accepted', 'In Preparation', 'Changes Requested'];
-  WVT.RFP_TYPES   = ['RFP', 'Technical Bid', 'Financial Bid', 'Affidavit', 'Undertaking', 'Other'];
+  WVT.RFP_TYPES   = ['Tender Document', 'Technical Bid', 'Financial Bid', 'Affidavit', 'Undertaking', 'Other'];
   WVT.PRIORITIES  = ['Low', 'Normal', 'High', 'Urgent'];
 
   /* The window the leadership "what is coming up" list watches. */
@@ -324,6 +324,30 @@
   /* Maintaining it stays with the tender team: they know which certificate is
      current and when it expires. */
   WVT.canEditDocs = function () { return WVT.isTenderTeam(); };
+
+  /* Which firm a tender is being bid through, its quote/rank, and the EMD
+     payment trail (what is out, what has come back) - narrower than "can see
+     the tender". AVP and DGM work their own tenders but do not see this;
+     it stays with the tender team and the leadership that watches the whole
+     portfolio. Mirrors wv_can_see_bid_finance() in the database, which is the
+     real guard - this only decides what the interface offers. */
+  WVT.canSeeBidFinance = function () {
+    if (WVT.isAdmin()) return true;
+    var me = WVT.me;
+    return !!(me && me.tender_access &&
+      ['founder', 'ceo', 'vp', 'tender_team'].indexOf(me.tender_role) >= 0);
+  };
+
+  /* Who may raise a document request. AVP and DGM are the ones closest to the
+     tender and the usual requesters; leadership and the tender team may still
+     raise their own. BD and a plain team member may not. Mirrors
+     wv_can_request_document() in the database. */
+  WVT.canRequestDocument = function () {
+    if (WVT.isAdmin()) return true;
+    var me = WVT.me;
+    return !!(me && me.tender_access &&
+      ['avp', 'dgm', 'vp', 'founder', 'ceo', 'tender_team'].indexOf(me.tender_role) >= 0);
+  };
 
   /* Who an RFP request can be given to.
    *

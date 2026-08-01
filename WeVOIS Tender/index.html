@@ -182,7 +182,7 @@
     <button role="tab" data-view="tenders" aria-selected="false">Tenders <span class="cnt" id="cntTenders">0</span></button>
     <button role="tab" data-view="rfps"    aria-selected="false">Document requests <span class="cnt" id="cntRfps">0</span></button>
     <button role="tab" data-view="docs"    aria-selected="false" id="docsTab" style="display:none">Documents <span class="cnt" id="cntDocs">0</span></button>
-    <button role="tab" data-view="emd"     aria-selected="false">EMD &amp; fees <span class="cnt" id="cntEmd">0</span></button>
+    <button role="tab" data-view="emd" id="emdTab" aria-selected="false" style="display:none">EMD &amp; fees <span class="cnt" id="cntEmd">0</span></button>
     <button role="tab" data-view="team"    aria-selected="false" id="teamTab" style="display:none">Team &amp; access</button>
   </div>
 
@@ -280,9 +280,9 @@
       <button type="button" data-f="late"  aria-selected="false">Overdue</button>
       <button type="button" data-f="all"   aria-selected="false">All</button>
     </div>
-    <div class="card">
+    <div class="card compact">
       <h2>Document requests</h2>
-      <p class="cap">Every request, who asked, who is preparing it, and where it has reached</p>
+      <p class="cap">Who asked, who is preparing it, where it has reached</p>
       <div id="rfpList"></div>
     </div>
   </section>
@@ -515,9 +515,9 @@
       <div class="subtabs" id="dTabs">
         <button type="button" data-d="info"  aria-selected="true">Details</button>
         <button type="button" data-d="check" aria-selected="false">Checklist</button>
-        <button type="button" data-d="bids"  aria-selected="false">Firms &amp; bids</button>
-        <button type="button" data-d="emd"   aria-selected="false">EMD &amp; fees</button>
-        <button type="button" data-d="corr"  aria-selected="false">Corrigenda</button>
+        <button type="button" id="tabBids" data-d="bids"  aria-selected="false">Firms &amp; bids</button>
+        <button type="button" id="tabEmd" data-d="emd"   aria-selected="false">EMD &amp; fees</button>
+        <button type="button" data-d="corr"  aria-selected="false">Tender Updates</button>
         <button type="button" data-d="rfp"   aria-selected="false">Document requests</button>
         <button type="button" data-d="talk"  aria-selected="false">Comments</button>
       </div>
@@ -783,22 +783,22 @@
 <div class="overlay" id="corrOverlay">
   <div class="modal">
     <div class="modal-h">
-      <div><h3 id="coTitle">Record a corrigendum</h3><p id="coSub"></p></div>
+      <div><h3 id="coTitle">Record a tender update</h3><p id="coSub"></p></div>
       <button class="x" data-close>✕</button>
     </div>
     <div class="modal-b">
       <div class="banner" id="coBanner" style="display:none"></div>
       <div class="form-grid">
-        <div class="field"><label for="coNo">Corrigendum no.</label><input id="coNo" type="text" placeholder="1"></div>
+        <div class="field"><label for="coNo">Update no.</label><input id="coNo" type="text" placeholder="1"></div>
         <div class="field"><label for="coIssued">Issued on</label><input id="coIssued" type="date"></div>
         <div class="field full"><label for="coSummary">What it changed *</label>
           <input id="coSummary" type="text" placeholder="Submission deadline extended by 14 days"></div>
-        <div class="field full"><label for="coUrl">Link to the corrigendum</label><input id="coUrl" type="url"></div>
+        <div class="field full"><label for="coUrl">Link to the update</label><input id="coUrl" type="url"></div>
       </div>
 
       <div class="sec-title">Revised dates</div>
       <p class="hint" style="margin:-4px 0 10px">
-        Fill in only the dates this corrigendum actually changed — a blank box
+        Fill in only the dates this update actually changed — a blank box
         means that date stayed as it was. Anything you enter here replaces the
         date on the tender, and the old one is kept on this record.
       </p>
@@ -814,11 +814,11 @@
       </div>
 
       <label class="checks" style="display:flex"><input type="checkbox" id="coPortal" checked>
-        <span>The portal has been updated with this corrigendum</span></label>
+        <span>The portal has been updated with this change</span></label>
     </div>
     <div class="modal-f">
       <button class="btn" data-close>Cancel</button>
-      <button class="btn primary" id="coSave">Save corrigendum</button>
+      <button class="btn primary" id="coSave">Save update</button>
     </div>
   </div>
 </div>

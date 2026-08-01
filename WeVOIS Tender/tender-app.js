@@ -718,6 +718,18 @@
   function renderDetail() {
     var t = WVT.tenderById(state.detailId);
     if (!t) return;
+
+    /* Firms & bids and EMD & fees are restricted to the tender team and
+       leadership (Founder, CEO, VP) - AVP and DGM work their own tenders but
+       do not see which firm it is filed through or its EMD status. Hide the
+       tabs, and bounce anyone already sitting on one back to Details. */
+    var seeFinance = WVT.canSeeBidFinance();
+    show('tabBids', seeFinance);
+    show('tabEmd', seeFinance);
+    if (!seeFinance && (state.detailTab === 'bids' || state.detailTab === 'emd')) {
+      state.detailTab = 'info';
+    }
+
     WV.$$('#dTabs button').forEach(function (b) {
       b.setAttribute('aria-selected', b.getAttribute('data-d') === state.detailTab ? 'true' : 'false');
     });
@@ -797,7 +809,7 @@
     var nCorr = WVT.corrigendumCount(t.id);
     if (nCorr) {
       var latest = WVT.corrigendaFor(t.id)[0];
-      rows.splice(1, 0, ['Corrigenda',
+      rows.splice(1, 0, ['Updates',
         '<b>' + nCorr + '</b> issued' +
         (latest && latest.issued_date ? ' <span class="muted">— latest ' + esc(WVT.fmtDate(latest.issued_date)) + '</span>' : '')]);
     }
@@ -882,6 +894,10 @@
   }
 
   function renderDetailEmd(t) {
+    if (!WVT.canSeeBidFinance()) {
+      $('dEmd').innerHTML = empty('Limited access — EMD status is visible to the Tender team, Founder, VP and CEO.');
+      return;
+    }
     var rows = WVT.emdFor(t.id);
     /* Money is tender-team-only, unlike everything else on this tender. The
        founder and VP read these amounts; they do not change them. */
@@ -913,7 +929,8 @@
     var rows = WVT.rfpsFor(t.id);
     var head = '<div class="card-head" style="margin-bottom:12px"><div class="muted">' +
       rows.length + ' request' + (rows.length === 1 ? '' : 's') + ' for this tender</div>' +
-      '<button class="btn sm primary" id="rfpAddFor">＋ Request a document</button></div>';
+      (WVT.canRequestDocument()
+        ? '<button class="btn sm primary" id="rfpAddFor">＋ Request a document</button>' : '') + '</div>';
 
     $('dRfp').innerHTML = head + (rows.length
       ? rows.map(function (r) {
@@ -993,11 +1010,18 @@
   }
 
   function openRfpEditor(tenderId) {
+    /* AVP and DGM raise these; leadership and the tender team may raise their
+       own too. BD and a plain team member cannot - the database refuses the
+       insert regardless, but check here so they get a clear reason instead
+       of a save that silently fails. */
+    if (!WVT.canRequestDocument()) {
+      return WV.toast('Document requests are raised by the AVP, the DGM, or leadership.');
+    }
     state.editRfpId = null;
     $('reTender').innerHTML = opts(
       WVT.data.tenders.map(function (t) { return { value: t.id, label: t.title }; }),
       tenderId || '', 'Not linked to a tender');
-    $('reType').innerHTML = opts(WVT.RFP_TYPES, 'RFP');
+    $('reType').innerHTML = opts(WVT.RFP_TYPES, 'Tender Document');
     $('rePri').innerHTML  = opts(WVT.PRIORITIES, 'Normal');
     /* Handing a request to a person is the VP's and the Founder's call. The
        database strips assigned_to from anyone else (trfp_guard_assign), so
@@ -1028,6 +1052,9 @@
   }
 
   async function saveRfp() {
+    if (!WVT.canRequestDocument()) {
+      return banner('reBanner', 'Document requests are raised by the AVP, the DGM, or leadership.', 'bad');
+    }
     var title = val('reTitleIn');
     if (!title) return banner('reBanner', 'Say what you need.', 'bad');
     /* Tied to a tender, or named as a topic - one or the other. A request
@@ -1347,6 +1374,16 @@
      ======================================================================== */
 
   function renderEmd() {
+    /* Second gate, independent of the tab being hidden - EMD payment status
+       (who has paid, who is still owed a refund) is restricted to the tender
+       team and leadership. AVP and DGM work their own tenders but do not see
+       this. Mirrors wv_can_see_bid_finance() in the database. */
+    if (!WVT.canSeeBidFinance()) {
+      $('emdKpis').innerHTML = '';
+      show('emdByFirmCard', false);
+      $('emdList').innerHTML = empty('Limited access — EMD status is visible to the Tender team, Founder, VP and CEO.');
+      return;
+    }
     var rows = WVT.data.emd.filter(function (e) {
       return state.emdFilter === 'all' || e.status === 'Paid' || e.status === 'Refund Due';
     });
@@ -1569,6 +1606,10 @@
   /* --- per-tender bids --- */
 
   function renderDetailBids(t) {
+    if (!WVT.canSeeBidFinance()) {
+      $('dBids').innerHTML = empty('Limited access — which firm this is filed through is visible to the Tender team, Founder, VP and CEO.');
+      return;
+    }
     var rows = WVT.bidsFor(t.id);
     var editable = WVT.canEditTender(t);
     var anyFirms = WVT.data.firms.length > 0;
@@ -1730,10 +1771,10 @@
     var editable = WVT.canEditTender(t);
 
     var head = '<div class="card-head" style="margin-bottom:12px">' +
-      '<div><b>' + rows.length + ' corrigend' + (rows.length === 1 ? 'um' : 'a') + '</b>' +
-      '<div class="muted" style="margin-top:4px">Amendments the authority issued against this tender. ' +
+      '<div><b>' + rows.length + ' update' + (rows.length === 1 ? '' : 's') + '</b>' +
+      '<div class="muted" style="margin-top:4px">Changes the authority issued against this tender. ' +
       'Revised dates here have already been applied above.</div></div>' +
-      (editable ? '<button class="btn sm primary" id="corrAdd">＋ Corrigendum</button>' : '') +
+      (editable ? '<button class="btn sm primary" id="corrAdd">＋ Update</button>' : '') +
       '</div>';
 
     var body = rows.length
@@ -1756,7 +1797,7 @@
               ? '<button class="btn sm danger" data-corrdel="' + esc(c.id) + '">Remove</button>' : '') + '</td>' +
             '</tr>';
         }).join('') + '</tbody></table></div>'
-      : empty('No corrigendum yet. Record one when the authority amends this tender.');
+      : empty('No updates yet. Record one when the authority changes something on this tender.');
 
     $('dCorr').innerHTML = head + body;
   }
@@ -1787,7 +1828,7 @@
 
   async function saveCorrigendum() {
     var summary = val('coSummary');
-    if (!summary) return banner('coBanner', 'Say what the corrigendum changed.', 'bad');
+    if (!summary) return banner('coBanner', 'Say what changed.', 'bad');
 
     var btn = $('coSave');
     btn.disabled = true;
@@ -1807,15 +1848,15 @@
     if (!r.ok) return banner('coBanner', 'Could not save: ' + r.error, 'bad');
     if (r.datesFailed) {
       return banner('coBanner',
-        'The corrigendum was saved, but the tender dates could not be updated: ' + r.error +
+        'The update was saved, but the tender dates could not be updated: ' + r.error +
         ' — change them on the tender by hand.', 'bad');
     }
 
-    await WV.logActivity('Corrigendum recorded', summary, state.corrTenderId);
+    await WV.logActivity('Tender update recorded', summary, state.corrTenderId);
     closeTop('corrOverlay');
     WV.toast(r.moved.length
-      ? 'Corrigendum saved — ' + r.moved.length + ' date' + (r.moved.length === 1 ? '' : 's') + ' updated'
-      : 'Corrigendum saved');
+      ? 'Update saved — ' + r.moved.length + ' date' + (r.moved.length === 1 ? '' : 's') + ' updated'
+      : 'Update saved');
     render();
     if (state.detailId) { state.detailTab = 'corr'; renderDetail(); }
   }
@@ -2226,7 +2267,7 @@
       'Type', 'Estimated value', 'EMD', 'Tender fee', 'Published', 'Pre-bid', 'Submission',
       'Opening', 'Stage', 'Go/No-Go', 'Submitted on', 'Result', 'Result date',
       'Why not awarded', 'Loss notes', 'Our rank', 'Quoted', 'Awarded to', 'Awarded value',
-      'Corrigenda', 'Docs ready', 'Docs required', 'Remarks'];
+      'Updates', 'Docs ready', 'Docs required', 'Remarks'];
     var rows = list.map(function (t) {
       var p = WVT.checklistProgress(t.id);
       return [t.nit_no || '', t.title, t.authority || '', t.city || '',
@@ -2248,6 +2289,11 @@
      ======================================================================== */
 
   function render() {
+    /* If access changed under someone sitting on the EMD tab (their role was
+       edited while it was open), bounce them to the dashboard rather than
+       render the payment tracker they can no longer see. */
+    if (state.view === 'emd' && !WVT.canSeeBidFinance()) { setView('dash'); return; }
+
     if (state.view === 'dash')    renderDash();
     if (state.view === 'tenders') renderTenders();
     if (state.view === 'rfps')    renderRfps();
@@ -2263,7 +2309,9 @@
     $('cntEmd').textContent  = String(WVT.data.emd.length);
     show('teamTab', WVT.isAdmin());
     show('docsTab', WVT.canSeeDocs());
+    show('emdTab', WVT.canSeeBidFinance());
     show('newTenderBtn', WVT.canUpload());
+    show('newRfpBtn', WVT.canRequestDocument());
   }
 
   async function refresh() {
@@ -2553,7 +2601,7 @@
            our record of the amendment does not undo the amendment. */
         var dr2 = await WVT.deleteCorrigendum(el.getAttribute('data-corrdel'));
         if (!dr2.ok) return WV.toast('Could not remove: ' + dr2.error);
-        WV.toast('Corrigendum removed — the tender dates were left as they are');
+        WV.toast('Update removed — the tender dates were left as they are');
         if (state.detailId) { state.detailTab = 'corr'; renderDetail(); }
         return;
       }

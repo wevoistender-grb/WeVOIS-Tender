@@ -31,6 +31,14 @@ a{color:var(--brand-2)}
 }
 .card h2{margin:0 0 2px; font-size:15px; font-weight:700; letter-spacing:.1px}
 .card .cap{margin:0 0 14px; font-size:12px; color:var(--muted)}
+/* A smaller, denser presentation for a card whose rows carry less to say than
+   a tender or an EMD payment - used on Document requests so the section reads
+   as a quick list, not a full report. */
+.card.compact{padding:13px 16px}
+.card.compact h2{font-size:13px}
+.card.compact .cap{font-size:11px; margin-bottom:9px}
+.card.compact table{font-size:12px}
+.card.compact th,.card.compact td{padding:6px 8px}
 .grid{display:grid; gap:16px}
 .g-2{grid-template-columns:1fr 1fr}
 .g-3{grid-template-columns:repeat(3,1fr)}
