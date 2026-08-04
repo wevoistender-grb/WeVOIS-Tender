@@ -943,6 +943,13 @@
     return r.error ? { ok: false, error: r.error.message } : { ok: true, row: r.data };
   };
 
+  /* The database has allowed this since TENDER-STAGES-UPDATE.sql (temd_delete,
+     same rule as editing) - the screen just never offered the button. */
+  WVT.deleteEmd = async function (id) {
+    var r = await WV.sb.from('tender_emd').delete().eq('id', String(id));
+    return r.error ? { ok: false, error: r.error.message } : { ok: true };
+  };
+
   WVT.saveCompanyDoc = async function (body, id) {
     var r = id
       ? await WV.sb.from('tender_company_docs').update(body).eq('id', String(id)).select().maybeSingle()
@@ -950,11 +957,44 @@
     return r.error ? { ok: false, error: r.error.message } : { ok: true, row: r.data };
   };
 
+  /* tcdocs_write already covers delete for the tender team and admin - same
+     story as EMD above. */
+  WVT.deleteCompanyDoc = async function (id) {
+    var r = await WV.sb.from('tender_company_docs').delete().eq('id', String(id));
+    return r.error ? { ok: false, error: r.error.message } : { ok: true };
+  };
+
   WVT.saveRfp = async function (body, id) {
     var r = id
       ? await WV.sb.from('tender_rfp_requests').update(body).eq('id', String(id)).select().maybeSingle()
       : await WV.sb.from('tender_rfp_requests').insert(body).select().maybeSingle();
     return r.error ? { ok: false, error: r.error.message } : { ok: true, row: r.data };
+  };
+
+  /* Unlike EMD and the document vault, deleting a request was never allowed
+     anywhere - there was no database policy for it at all, so a button here
+     would have failed with a raw RLS error.
+     Exactly canAssignRfp() (the CEO, the VP, the Founder, admin - the same
+     people trfp_read already trusts to see every request), plus one extra
+     case: whoever raised the request may withdraw it themselves, but only
+     before anyone has acted on it - once it is accepted, on hold, or further
+     along, somebody is already relying on it.
+     The tender team is deliberately not given a wider right here even though
+     they prepare these requests: the database only lets them SEE the ones
+     they raised or are assigned to (trfp_read), and a delete right cannot
+     reach further than what you can see - Postgres would just match 0 rows.
+     Mirrors wv_can_delete_rfp() in TENDER-DELETE-OPTIONS-UPDATE.sql, which is
+     the real guard. */
+  WVT.canDeleteRfp = function (r) {
+    if (!r) return false;
+    if (WVT.canAssignRfp()) return true;
+    return !!(WV.currentUser && r.requested_by &&
+      String(r.requested_by) === String(WV.currentUser.id) && r.status === 'Requested');
+  };
+
+  WVT.deleteRfp = async function (id) {
+    var r = await WV.sb.from('tender_rfp_requests').delete().eq('id', String(id));
+    return r.error ? { ok: false, error: r.error.message } : { ok: true };
   };
 
   /* A free-text note on an RFP request. The status trigger writes its own

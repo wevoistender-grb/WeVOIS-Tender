@@ -1107,6 +1107,7 @@
     /* A request not tied to a tender still has to say what it is about. */
     $('rdSub').textContent = (t ? t.title : (r.topic || 'No tender')) + ' · ' +
       (r.doc_type || 'Document') + ' · ' + (r.priority || 'Normal');
+    show('rdDelete', WVT.canDeleteRfp(r));
     $('rdBody').innerHTML = '<div class="muted">Loading the timeline…</div>';
     WV.openOverlay('rfpDetailOverlay');
 
@@ -1275,6 +1276,22 @@
     await openRfpDetail(id);
   }
 
+  async function deleteRfpRequest() {
+    var id = state.rfpDetailId;
+    if (!id) return;
+    var r = null;
+    for (var i = 0; i < WVT.data.rfps.length; i++) {
+      if (String(WVT.data.rfps[i].id) === String(id)) { r = WVT.data.rfps[i]; break; }
+    }
+    if (!window.confirm('Delete this request' + (r ? ' — "' + r.title + '"' : '') +
+      '? Its whole timeline goes with it. This cannot be undone.')) return;
+    var dr = await WVT.deleteRfp(id);
+    if (!dr.ok) return WV.toast('Could not delete: ' + dr.error);
+    WV.closeOverlays();
+    WV.toast('Deleted');
+    await refresh();
+  }
+
   /* ========================================================================
      DOCUMENT VAULT
      ======================================================================== */
@@ -1334,6 +1351,7 @@
     setVal('cdNotes', d && d.notes);
     setVal('cdLink', d && d.file_url);
     $('cdFileName').textContent = d && d.file_path ? 'Replace the attached file' : 'Click to attach the document';
+    show('cdDelete', !!d);
     banner('cdBanner', '');
     WV.openOverlay('docOverlay');
   }
@@ -1366,6 +1384,21 @@
     await WV.logActivity(state.editDocId ? 'Company document updated' : 'Company document added', name, r.row && r.row.id);
     WV.closeOverlays();
     WV.toast('Saved');
+    await refresh();
+  }
+
+  async function deleteDoc() {
+    if (!state.editDocId) return;
+    var d = null;
+    for (var i = 0; i < WVT.data.companyDocs.length; i++) {
+      if (String(WVT.data.companyDocs[i].id) === String(state.editDocId)) { d = WVT.data.companyDocs[i]; break; }
+    }
+    if (!window.confirm('Delete ' + (d ? '"' + d.name + '"' : 'this document') +
+      '? Any tender checklist that already points at it keeps its own line — only the master copy in the vault goes.')) return;
+    var r = await WVT.deleteCompanyDoc(state.editDocId);
+    if (!r.ok) return banner('cdBanner', r.error, 'bad');
+    WV.closeOverlays();
+    WV.toast('Deleted');
     await refresh();
   }
 
@@ -1906,7 +1939,7 @@
     setVal('eeDue', e && e.refund_due_on);
     setVal('eeBack', e && e.refunded_on);
     setVal('eeNotes', e && e.notes);
-    show('eeDelete', false);
+    show('eeDelete', !!e);
     banner('eeBanner', '');
     WV.openOverlay('emdOverlay');
   }
@@ -1941,6 +1974,18 @@
     var stacked = detailOpen();
     if (stacked) closeTop('emdOverlay'); else WV.closeOverlays();
     WV.toast('Saved');
+    await refresh();
+    if (stacked) { state.detailTab = 'emd'; renderDetail(); }
+  }
+
+  async function deleteEmd() {
+    if (!state.editEmdId) return;
+    if (!window.confirm('Remove this payment record? This only removes the record — it does not undo the payment itself.')) return;
+    var r = await WVT.deleteEmd(state.editEmdId);
+    if (!r.ok) return banner('eeBanner', r.error, 'bad');
+    var stacked = detailOpen();
+    if (stacked) closeTop('emdOverlay'); else WV.closeOverlays();
+    WV.toast('Removed');
     await refresh();
     if (stacked) { state.detailTab = 'emd'; renderDetail(); }
   }
@@ -2722,6 +2767,7 @@
     on('newRfpBtn', 'click', function () { openRfpEditor(null); });
     on('reSave', 'click', saveRfp);
     on('reTender', 'change', syncRequestTopic);
+    on('rdDelete', 'click', deleteRfpRequest);
     on('rfpFilter', 'click', function (e) {
       var b = e.target.closest('button[data-f]');
       if (!b) return;
@@ -2732,6 +2778,7 @@
     /* --- documents --- */
     on('newDocBtn', 'click', function () { openDocEditor(null); });
     on('cdSave', 'click', saveDoc);
+    on('cdDelete', 'click', deleteDoc);
     on('cdDrop', 'click', function () { $('cdFile').click(); });
     on('cdFile', 'change', function (e) {
       var f = e.target.files && e.target.files[0];
@@ -2744,6 +2791,7 @@
 
     /* --- EMD --- */
     on('eeSave', 'click', saveEmd);
+    on('eeDelete', 'click', deleteEmd);
     on('emdSeg', 'click', function (e) {
       var b = e.target.closest('button[data-f]');
       if (!b) return;
